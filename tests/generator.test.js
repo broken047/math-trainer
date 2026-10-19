@@ -82,7 +82,7 @@ for (let mask = 1; mask < 16; mask++) opSets.push(['+', '-', '*', '/'].filter((_
 let total = 0, failures = 0;
 const impossible = [];
 const stats = { divisionNoParens: 0, divisionAfterParens: 0, negativeAnswers: 0, small: { operands: 0, ones: 0 },
-                fracAnswers: 0, decAnswers: 0, mixedKinds: 0 };
+                fracAnswers: 0, decAnswers: 0, mixedKinds: 0, table: { facts: 0, edges: 0, distinct: new Set() } };
 const fail = msg => { if (failures++ < 25) console.log('ОШИБКА', msg); };
 
 const NO_FRACTIONS = { fractions: false, decimals: false };
@@ -97,7 +97,7 @@ const FRACTION_MODES = [
 function check(settings, perSetting) {
     const { ops, actions, range, negatives, complexity } = settings;
     const fractional = settings.fractions || settings.decimals;
-    const name = `${ops.map(o => SIGN[o]).join('')} до ${range}${negatives ? ' с отрицательными' : ''} ${settings.mode || complexity} x${actions}`;
+    const name = `${ops.map(o => SIGN[o]).join('')} ${settings.table ? 'таблица умножения' : 'до ' + range}${negatives ? ' с отрицательными' : ''} ${settings.mode || complexity} x${actions}`;
     for (let n = 0; n < perSetting; n++) {
         const ex = page.generateExample(settings);
         if (!ex) { impossible.push(name); return; }
@@ -115,9 +115,21 @@ function check(settings, perSetting) {
                 fail(`промежуточный результат ${s.result.n}/${s.result.d} вне предела: ${label}`);
             if (!fractional) {
                 if (s.result.d !== 1) fail(`деление с остатком: ${label}`);
-                if (s.op === '÷' && (Math.abs(s.b.n) < 2 || Math.abs(s.result.n) < 2)) fail(`вырожденное деление: ${label}`);
+                if (s.op === '÷' && !settings.table && (Math.abs(s.b.n) < 2 || Math.abs(s.result.n) < 2)) fail(`вырожденное деление: ${label}`);
             }
-            if ((s.op === '×' || s.op === '÷') && Math.abs(s.b.n) === s.b.d) fail(`умножение или деление на 1: ${label}`);
+            if (settings.table && !fractional) {
+                // Только таблица: оба множителя, делитель и частное — от 1 до 10
+                const inTable = v => v.d === 1 && Math.abs(v.n) >= 1 && Math.abs(v.n) <= 10;
+                if (s.op === '×' && !(inTable(s.a) && inTable(s.b))) fail(`не из таблицы умножения ${s.a.n} × ${s.b.n}: ${label}`);
+                if (s.op === '÷' && !(inTable(s.b) && inTable(s.result))) fail(`не из таблицы деления ${s.a.n} ÷ ${s.b.n}: ${label}`);
+                if (s.op === '×' || s.op === '÷') {
+                    stats.table.facts++;
+                    const edge = v => Math.abs(v.n) === 1 || Math.abs(v.n) === 10;
+                    const factors = s.op === '×' ? [s.a, s.b] : [s.b, s.result];
+                    if (factors.some(edge)) stats.table.edges++;
+                    stats.table.distinct.add(s.op + Math.abs(s.a.n) + ',' + Math.abs(s.b.n));
+                }
+            } else if ((s.op === '×' || s.op === '÷') && Math.abs(s.b.n) === s.b.d) fail(`умножение или деление на 1: ${label}`);
             if (!fractional && range > 10 && complexity !== 'all' && !negatives && (s.op === '+' || s.op === '−')) {
                 const transition = s.op === '+' ? carryAt(s.a.n, s.b.n) : borrowAt(s.a.n, s.b.n);
                 if (transition !== (complexity === 'carry')) fail(`тип вычислений ${s.a.n} ${s.op} ${s.b.n}: ${label}`);
@@ -178,6 +190,14 @@ for (const actions of [1, 2, 3, 5, 10]) {
     check({ ops, actions, range, negatives, complexity, ...NO_FRACTIONS }, 100);
 }
 
+// Таблица умножения: предел 100, умножение и деление только табличные
+for (const ops of opSets)
+for (const negatives of [false, true])
+for (const complexity of negatives ? ['all'] : ['all', 'no-carry', 'carry'])
+for (const actions of [1, 2, 3, 5, 10]) {
+    check({ ops, actions, range: 100, table: true, negatives, complexity, ...NO_FRACTIONS }, 100);
+}
+
 // Дроби: тип вычислений для них не действует
 for (const ops of opSets)
 for (const range of [10, 20, 100, 1000])
@@ -192,6 +212,7 @@ console.log(`Деление без скобок («a + b ÷ c»): ${stats.divisi
 console.log(`Отрицательных ответов: ${stats.negativeAnswers}`);
 console.log(`Ответов обыкновенной дробью: ${stats.fracAnswers}, десятичной: ${stats.decAnswers}, примеров с обоими видами дробей: ${stats.mixedKinds}`);
 console.log(`Доля «± 1» среди слагаемых при пределе 10 и 20: ${(100 * stats.small.ones / stats.small.operands).toFixed(1)}%`);
+console.log(`Таблица умножения: действий × и ÷ ${stats.table.facts}, с 1 или 10 — ${(100 * stats.table.edges / stats.table.facts).toFixed(1)}%, разных пар чисел ${stats.table.distinct.size}`);
 if (impossible.length) console.log(`Невозможные сочетания настроек (${impossible.length}):\n  ` + impossible.join('\n  '));
 
 const show = (settings, count = 4) => Array.from({ length: count }, () => {
@@ -202,6 +223,9 @@ const show = (settings, count = 4) => Array.from({ length: count }, () => {
 }).join('  |  ');
 console.log('\nПримеры:');
 console.log('+−×÷ до 100, 2 действия:     ', show({ ops: ['+', '-', '*', '/'], actions: 2, range: 100 }));
+console.log('× таблица, 1 действие:        ', show({ ops: ['*'], actions: 1, range: 100, table: true }, 8));
+console.log('×÷ таблица, 1 действие:       ', show({ ops: ['*', '/'], actions: 1, range: 100, table: true }, 8));
+console.log('+−×÷ таблица, 3 действия:     ', show({ ops: ['+', '-', '*', '/'], actions: 3, range: 100, table: true }, 4));
 console.log('+− до 20, 9 действий:         ', show({ ops: ['+', '-'], actions: 9, range: 20 }, 2));
 console.log('+−×÷ до 9 999 999, 2 действия:', show({ ops: ['+', '-', '*', '/'], actions: 2, range: 9999999 }, 2));
 console.log('+− дроби, одинаковые знам.:   ', show({ ops: ['+', '-'], actions: 2, range: 10, fractions: true, sameDenominators: true }));

@@ -157,6 +157,7 @@
                 <select id="max-range" onchange="adjustOptions(); saveAllSettings();">
                     <option value="10">До 10 (однозначные)</option>
                     <option value="20">До 20 (переход через десяток)</option>
+                    <option value="table">Таблица умножения (до 100)</option>
                     <option value="100" selected>До 100 (двузначные)</option>
                     <option value="1000">До 1000 (трёхзначные)</option>
                     <option value="10000">До 10 000 (четырёхзначные)</option>
@@ -213,7 +214,9 @@
         const NEGATIVE_SHARE = 0.3;     // доля отрицательных чисел, когда они включены
         const PARENS_SHARE = 0.35;      // доля «(a + b) × c» среди умножений и делений после сложения
         const ONE_SHARE = 0.25;         // «± 1» выпадает в 4 раза реже других чисел
+        const TABLE_EDGE_SHARE = 0.25;  // в таблице умножения «× 1» и «× 10» — в 4 раза реже других
         const GENERATION_BUDGET_MS = 300; // не дольше этого на один пример
+        const DUPLICATE_RETRIES = 30;   // сколько раз пробовать заменить повторившийся пример
         const INT_SHARE = 0.25;        // доля целых чисел, когда включены дроби
         const MIXED_SHARE = 0.3;        // доля смешанных чисел («2 3/4») среди обыкновенных дробей
         const MAX_FRACTION_DEN = 10;    // знаменатели дробей в примере — от 2 до 10
@@ -241,7 +244,7 @@
             document.getElementById('fraction-options').style.display = fractions ? 'flex' : 'none';
             document.getElementById('decimal-options').style.display = decimals ? 'flex' : 'none';
 
-            const maxActions = maxActionsFor(parseInt(range));
+            const maxActions = maxActionsFor(rangeLimit(range));
             const actionsInput = document.getElementById('actions-count');
             actionsInput.max = maxActions;
             if (parseInt(actionsInput.value) > maxActions) actionsInput.value = maxActions;
@@ -304,12 +307,16 @@
             return ops;
         }
 
+        // «Таблица умножения» — это предел 100, где умножение и деление только табличные
+        function rangeLimit(value) { return value === 'table' ? 100 : parseInt(value) || 100; }
+
         function getSettings() {
             return {
                 ops: getSelectedOperations(),
                 actions: Math.min(Math.max(parseInt(document.getElementById('actions-count').value) || 1, 1),
-                                  maxActionsFor(parseInt(document.getElementById('max-range').value))),
-                range: parseInt(document.getElementById('max-range').value) || 100,
+                                  maxActionsFor(rangeLimit(document.getElementById('max-range').value))),
+                range: rangeLimit(document.getElementById('max-range').value),
+                table: document.getElementById('max-range').value === 'table',
                 negatives: document.getElementById('opt-negatives').checked,
                 fractions: document.getElementById('opt-fractions').checked,
                 sameDenominators: document.getElementById('fraction-denominators').value === 'same',
@@ -585,13 +592,21 @@
             return settings.range === 1000 ? 20 : 99;
         }
 
+        // Множитель таблицы умножения от 1 до 10; 1 и 10 выпадают изредка
+        function tableFactor() {
+            for (;;) {
+                const factor = getRandomInt(1, 10);
+                if ((factor !== 1 && factor !== 10) || Math.random() < TABLE_EDGE_SHARE) return factor;
+            }
+        }
+
         // Целое число перед × или ÷ подбирается заново под множитель или делитель: «7 × 8», «56 ÷ 8».
-        // Знак числа сохраняется
+        // В таблице умножения оба множителя (делитель и частное) от 1 до 10. Знак числа сохраняется
         function rebuildPlain(base, op, settings, isFirst) {
-            const factor = randomSign(settings) * getRandomInt(2, factorLimit(settings));
+            const factor = randomSign(settings) * (settings.table ? tableFactor() : getRandomInt(2, factorLimit(settings)));
             const maxQuotient = Math.floor(settings.range / Math.abs(factor));
-            if (maxQuotient < 2) return null;
-            const n = getRandomInt(2, maxQuotient);
+            if (maxQuotient < 2 && !settings.table) return null;
+            const n = settings.table ? tableFactor() : getRandomInt(2, maxQuotient);
             const number = (base.value.n < 0 ? -1 : 1) * (op === '*' ? n : n * Math.abs(factor));
             const left = renderOperand({ kind: 'int', value: rat(number) }, isFirst);
             const right = renderOperand({ kind: 'int', value: rat(factor) }, false);
@@ -608,6 +623,10 @@
         function pickIntFactor(base, op, settings) {
             const limit = factorLimit(settings);
             const sign = randomSign(settings);
+            if (settings.table) {
+                const factor = pickTableFactor(Math.abs(base), op);
+                return factor === null ? null : sign * factor;
+            }
             if (op === '*') {
                 if (base === 0) return null;
                 const max = Math.min(limit, Math.floor(settings.range / Math.abs(base)));
@@ -618,6 +637,21 @@
                 if (base % d === 0) divisors.push(d);
             }
             return divisors.length ? sign * divisors[getRandomInt(0, divisors.length - 1)] : null;
+        }
+
+        // Множитель или делитель из таблицы умножения: base × множитель, где base от 1 до 10,
+        // или base ÷ делитель, где делитель и частное от 1 до 10. null — если таблицей не обойтись
+        function pickTableFactor(base, op) {
+            if (op === '*') return base >= 1 && base <= 10 ? tableFactor() : null;
+            const divisors = [];
+            for (let d = 1; d <= 10; d++) {
+                if (base % d === 0 && base / d >= 1 && base / d <= 10) divisors.push(d);
+            }
+            if (!divisors.length) return null;
+            // «÷ 1», «÷ 10» и частное 1 или 10 выпадают изредка
+            const usual = divisors.filter(d => d !== 1 && d !== 10 && base / d !== 1 && base / d !== 10);
+            const pool = usual.length && Math.random() > TABLE_EDGE_SHARE ? usual : divisors;
+            return pool[getRandomInt(0, pool.length - 1)];
         }
 
         // Множитель или делитель для base любого вида: целый, обыкновенная или десятичная дробь
@@ -647,7 +681,7 @@
             const rest = wrap ? [] : state.terms.slice(0, -1);
 
             let term, kinds = state.kinds;
-            if (base.operand && base.operand.kind === 'int' && pickKind(settings) === 'int' && (op === '/' || Math.random() < 0.5)) {
+            if (base.operand && base.operand.kind === 'int' && pickKind(settings) === 'int' && (settings.table || op === '/' || Math.random() < 0.5)) {
                 term = rebuildPlain(base, op, settings, rest.length === 0);
             } else {
                 const factor = pickFactor(base.value, op, settings);
@@ -750,8 +784,14 @@
             const settings = getSettings();
             if (settings.ops.length === 0) { alert('Выберите операции в настройках!'); toggleModal(true); return; }
 
+            const seen = new Set();
             for (let i = 0; i < EXAMPLES_COUNT; i++) {
-                const example = generateExample(settings);
+                // Без повторов в одном наборе, пока есть из чего выбирать
+                let example = generateExample(settings);
+                for (let retry = 0; retry < DUPLICATE_RETRIES && example && seen.has(example.text); retry++) {
+                    example = generateExample(settings);
+                }
+                if (example) seen.add(example.text);
                 if (!example) {
                     currentExamples = [];
                     alert('С такими настройками не получается составить примеры. Уменьшите количество действий, выберите больше операций или увеличьте предел счёта.');

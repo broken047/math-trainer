@@ -49,7 +49,7 @@
         .examples-grid.measuring { grid-template-columns: max-content; }
         .examples-grid.measuring .example-item { width: max-content; }
         .examples-grid.measuring .example-text { white-space: nowrap; }
-        .answer-input { width: 4.4em; flex-shrink: 0; padding: 0.3em; font-size: 0.8em; font-weight: bold; text-align: center; border: 2px solid var(--border-color); border-radius: 6px; outline: none; background: var(--panel-bg); color: var(--text-color); }
+        .answer-input { width: var(--answer-width, 4.4em); flex-shrink: 0; padding: 0.3em; font-size: 0.8em; font-weight: bold; text-align: center; border: 2px solid var(--border-color); border-radius: 6px; outline: none; background: var(--panel-bg); color: var(--text-color); }
         .answer-input.correct { border-color: var(--success-color); background-color: rgba(46,204,113,0.15); color: var(--success-color); }
         .answer-input.incorrect { border-color: var(--error-color); background-color: rgba(231,76,60,0.15); }
         .sign-toggle { flex-shrink: 0; width: 1.7em; height: 1.7em; font-size: 0.7em; font-weight: bold; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); color: var(--text-color); cursor: pointer; }
@@ -119,20 +119,23 @@
                 </div>
             </div>
             <div class="setting-row">
-                <label for="actions-count">Количество действий в примере (1–10):</label>
+                <label for="actions-count" id="actions-label">Количество действий в примере (1–10):</label>
                 <input type="number" id="actions-count" min="1" max="10" value="1" onchange="saveAllSettings()">
             </div>
             <div class="setting-row">
                 <label for="max-range">Предел и сложность счёта:</label>
-                <select id="max-range" onchange="adjustComplexityOptions(); saveAllSettings();">
+                <select id="max-range" onchange="adjustOptions(); saveAllSettings();">
                     <option value="10">До 10 (однозначные)</option>
                     <option value="20">До 20 (переход через десяток)</option>
                     <option value="100" selected>До 100 (двузначные)</option>
                     <option value="1000">До 1000 (трёхзначные)</option>
+                    <option value="10000">До 10 000 (четырёхзначные)</option>
+                    <option value="100000">До 100 000 (пятизначные)</option>
+                    <option value="9999999">До 9 999 999 (семизначные)</option>
                 </select>
             </div>
             <div class="setting-row">
-                <label class="checkbox-row"><input type="checkbox" id="opt-negatives" onchange="adjustComplexityOptions(); saveAllSettings();"> Отрицательные числа</label>
+                <label class="checkbox-row"><input type="checkbox" id="opt-negatives" onchange="adjustOptions(); saveAllSettings();"> Отрицательные числа</label>
             </div>
             <div class="setting-row" id="complexity-container">
                 <label for="complexity-type">Тип вычислений:</label>
@@ -149,11 +152,15 @@
         let currentExamples = []; let timerInterval = null; let secondsElapsed = 0;
         let isTrainingActive = false;
         const EXAMPLES_COUNT = 20;
-        const MAX_ACTIONS = 10;
+        // Чем длиннее числа, тем меньше действий: семизначные в уме в десять действий никто не считает
+        const MAX_ACTIONS_BY_RANGE = { 10000: 5, 100000: 4, 9999999: 3 };
+        function maxActionsFor(range) { return MAX_ACTIONS_BY_RANGE[range] || 10; }
         const OP_SIGNS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
         const NBSP = ' ';          // знак действия не отрывается от числа при переносе строки
+        const THIN_NBSP = ' ';     // узкий неразрывный пробел между разрядами
         const NEGATIVE_SHARE = 0.3;     // доля отрицательных чисел, когда они включены
         const PARENS_SHARE = 0.35;      // доля «(a + b) × c» среди умножений и делений после сложения
+        const ONE_SHARE = 0.25;         // «± 1» выпадает в 4 раза реже других чисел
 
         function toggleModal(show) { document.getElementById('settings-modal').classList.toggle('active', show); }
 
@@ -164,11 +171,19 @@
             localStorage.setItem('math_trainer_theme', currentTheme);
         }
 
-        // Переход через разряд имеет смысл только для неотрицательных чисел и чисел больше 10
-        function adjustComplexityOptions() {
-            const range = document.getElementById('max-range').value;
+        function adjustOptions() {
+            const rangeSelect = document.getElementById('max-range');
+            if (!rangeSelect.value) rangeSelect.value = '100';   // сохранён предел, которого больше нет в списке
+            const range = rangeSelect.value;
             const negatives = document.getElementById('opt-negatives').checked;
+            // Переход через разряд имеет смысл только для неотрицательных чисел и чисел больше 10
             document.getElementById('complexity-container').style.display = (range === '10' || negatives) ? 'none' : 'flex';
+
+            const maxActions = maxActionsFor(parseInt(range));
+            const actionsInput = document.getElementById('actions-count');
+            actionsInput.max = maxActions;
+            if (parseInt(actionsInput.value) > maxActions) actionsInput.value = maxActions;
+            document.getElementById('actions-label').textContent = 'Количество действий в примере (1–' + maxActions + '):';
         }
 
         function saveAllSettings() {
@@ -203,7 +218,7 @@
                     document.getElementById('complexity-type').value = config.complexity;
                 } catch(e) { console.error("Ошибка чтения конфига", e); }
             }
-            adjustComplexityOptions();
+            adjustOptions();
         }
 
         function getRandomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
@@ -220,7 +235,8 @@
         function getSettings() {
             return {
                 ops: getSelectedOperations(),
-                actions: Math.min(Math.max(parseInt(document.getElementById('actions-count').value) || 1, 1), MAX_ACTIONS),
+                actions: Math.min(Math.max(parseInt(document.getElementById('actions-count').value) || 1, 1),
+                                  maxActionsFor(parseInt(document.getElementById('max-range').value))),
                 range: parseInt(document.getElementById('max-range').value) || 100,
                 negatives: document.getElementById('opt-negatives').checked,
                 complexity: document.getElementById('complexity-type').value
@@ -254,19 +270,26 @@
             return value <= settings.range && value >= (settings.negatives ? -settings.range : 0);
         }
 
-        function formatFirst(value) { return value < 0 ? '−' + (-value) : String(value); }
-        function formatOperand(value) { return value < 0 ? '(−' + (-value) + ')' : String(value); }
+        // Числа от 10 000 пишутся с разделением разрядов: «456 789»
+        function formatNumber(value) {
+            const text = String(Math.abs(value));
+            return Math.abs(value) >= 10000 ? text.replace(/\B(?=(\d{3})+$)/g, THIN_NBSP) : text;
+        }
+        function formatFirst(value) { return value < 0 ? '−' + formatNumber(value) : formatNumber(value); }
+        function formatOperand(value) { return value < 0 ? '(−' + formatNumber(value) + ')' : formatNumber(value); }
         function randomSign(settings) { return settings.negatives && Math.random() < NEGATIVE_SHARE ? -1 : 1; }
 
-        // В длинных примерах стартовое число любое: цепочке сложений нужно начинать с малого, вычитаний — с большого
+        // Единица старшего разряда, на разряд меньше предела: до 100 — 10, до 1000 — 100, до 9 999 999 — 1 000 000
+        function lowerUnit(range) { return Math.pow(10, Math.floor(Math.log10(range + 1)) - 1); }
+
+        // В коротких примерах стартовое число на разряд меньше предела или той же разрядности:
+        // до 100 — от 11 до 89, до 1000 — от 101 до 899 и т. д. В длинных — любое: цепочке сложений
+        // нужно начинать с малого, вычитаний — с большого
         function getInitialValue(settings) {
             const maxRange = settings.range;
-            if (settings.actions > 2) return getRandomInt(1, maxRange - 1);
-            if (maxRange === 10) return getRandomInt(1, 9);
-            if (maxRange === 20) return getRandomInt(1, 19);
-            if (maxRange === 100) return getRandomInt(11, 89);
-            if (maxRange === 1000) return getRandomInt(101, 899);
-            return getRandomInt(1, maxRange - 1);
+            if (settings.actions > 2 || maxRange <= 20) return getRandomInt(1, maxRange - 1);
+            const unit = lowerUnit(maxRange);
+            return getRandomInt(unit + 1, maxRange - unit - 1);
         }
 
         /*
@@ -280,25 +303,55 @@
             return terms.map((t, i) => i === 0 ? t.text : ' ' + (t.sign > 0 ? '+' : '−') + NBSP + t.text).join('');
         }
 
+        // При пределе от 100 к многозначному числу прибавляется число не меньше lowerUnit:
+        // до 100 — от 10, до 1000 — от 100 и т. д.
         function minOperand(total, settings) {
-            if (settings.range === 100 && Math.abs(total) > 10) return 10;
-            if (settings.range === 1000 && Math.abs(total) > 100) return 100;
-            return 1;
+            const unit = lowerUnit(settings.range);
+            return settings.range >= 100 && Math.abs(total) > unit ? unit : 1;
         }
 
-        // remaining — сколько действий ещё впереди: под них оставляется запас до предела счёта
+        function transitionFree(settings) {
+            return settings.range > 10 && !settings.negatives && settings.complexity === 'no-carry';
+        }
+
+        // Число от min до max без перехода через разряд: каждая цифра подбирается так,
+        // чтобы в своём разряде не было переноса (сложение) или заёма (вычитание).
+        // Случайным перебором такое многозначное число почти не найти
+        function randomWithoutTransition(total, sign, min, max) {
+            const digits = String(max).length;
+            for (let attempt = 0; attempt < 20; attempt++) {
+                let value = 0;
+                for (let i = digits - 1; i >= 0; i--) {
+                    const totalDigit = Math.floor(total / Math.pow(10, i)) % 10;
+                    value = value * 10 + getRandomInt(0, sign > 0 ? 9 - totalDigit : totalDigit);
+                }
+                if (value >= min && value <= max) return value;
+            }
+            return null;
+        }
+
+        // remaining — сколько действий ещё впереди
         function tryAdditive(state, op, settings, remaining) {
             const sign = op === '+' ? 1 : -1;
-            const minNext = minOperand(state.total, settings);
+            // Когда сумма может только расти (одно сложение) или только убывать (одно вычитание),
+            // каждому слагаемому достаётся доля оставшегося запаса до предела, иначе длинная цепочка
+            // в него упрётся. При смешанных + и − сумма колеблется сама, и запас не нужен
+            const oneWay = !settings.negatives && !settings.ops.includes(op === '+' ? '-' : '+');
             for (let attempt = 0; attempt < 20; attempt++) {
                 const operandSign = randomSign(settings);
                 // Насколько можно сдвинуть сумму в нужную сторону, не выходя за пределы счёта
                 const direction = sign * operandSign;
-                const maxMagnitude = direction > 0 ? settings.range - state.total
-                                                   : state.total + (settings.negatives ? settings.range : 0);
-                if (maxMagnitude < 1) continue;
-                const cap = Math.max(1, Math.floor(maxMagnitude / (remaining + 1)));
-                const value = operandSign * getRandomInt(cap >= minNext ? minNext : 1, cap);
+                const maxMagnitude = Math.min(settings.range, direction > 0 ? settings.range - state.total
+                                                                            : state.total + (settings.negatives ? settings.range : 0));
+                const max = oneWay ? Math.floor(maxMagnitude / (remaining + 1)) : maxMagnitude;
+                if (max < 1) continue;
+                const min = Math.min(minOperand(state.total, settings), max);
+                const value = transitionFree(settings)
+                    ? randomWithoutTransition(state.total, sign, min, max)
+                    : operandSign * getRandomInt(min, max);
+                // «+ 1» и «− 1» нужны, но изредка: большинство единиц отбрасывается
+                if (Math.abs(value) === 1 && Math.random() > ONE_SHARE) continue;
+                if (value === null) continue;
                 if (!transitionAllowed(state.total, sign, value, settings)) continue;
                 return {
                     terms: [...state.terms, { sign, text: formatOperand(value), value, plain: true }],
@@ -308,7 +361,11 @@
             return null;
         }
 
-        function factorLimit(settings) { return settings.range === 1000 ? 20 : 10; }
+        // Множитель и делитель: до 100 — табличные (до 10), до 1000 — до 20, дальше — двузначные
+        function factorLimit(settings) {
+            if (settings.range <= 100) return 10;
+            return settings.range === 1000 ? 20 : 99;
+        }
 
         // Число перед × или ÷ подбирается заново под множитель или делитель: «7 × 8», «56 ÷ 8».
         // Знак числа сохраняется
@@ -323,7 +380,7 @@
             return { sign: base.sign, text, value };
         }
 
-        // Множитель от 2 до 10 (до 20 для 1000), делитель такой же и частное по модулю не меньше 2:
+        // Множитель и делитель от 2 до factorLimit, частное по модулю не меньше 2:
         // без «13 ÷ 13» и «450 ÷ 225»
         function pickFactor(base, op, settings) {
             const limit = factorLimit(settings);
@@ -417,6 +474,10 @@
                 currentExamples.push(example);
             }
 
+            // Поле ответа вмещает все цифры предела и минус
+            const answerChars = String(settings.range).length + (settings.negatives ? 1 : 0);
+            container.style.setProperty('--answer-width', Math.max(4.4, answerChars * 0.75 + 1).toFixed(2) + 'em');
+
             currentExamples.forEach((example, i) => {
                 const item = document.createElement('div');
                 item.className = 'example-item';
@@ -440,9 +501,9 @@
             container.style.setProperty('--col-min', Math.min(widest / fontSize + 0.2, 34).toFixed(2) + 'em');
         }
 
-        // Принимает «-5» и «−5»; всё, что не целое число, считается ошибкой
+        // Принимает «-5», «−5» и «12 345»; всё, что не целое число, считается ошибкой
         function parseAnswer(raw) {
-            const text = raw.replace(/[−–]/g, '-');
+            const text = raw.replace(/[−–]/g, '-').replace(/\s/g, '');
             return /^-?\d+$/.test(text) ? Number(text) : NaN;
         }
 

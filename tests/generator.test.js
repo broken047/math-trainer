@@ -10,14 +10,14 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const page = { window: {}, document: {}, localStorage: {}, console, Math };
 vm.createContext(page);
-vm.runInContext(script + '\nthis.generateExample = generateExample;', page);
+vm.runInContext(script + '\nthis.generateExample = generateExample; this.maxActionsFor = maxActionsFor;', page);
 
-const PER_SETTING = 150;
+const PER_SETTING = 100;
 const SIGN = { '+': '+', '-': '−', '*': '×', '/': '÷' };
 
 // Разбор и вычисление примера: возвращает ответ и все выполненные действия
 function evaluate(text) {
-    const tokens = text.replace(/ /g, ' ').match(/\d+|[()+−×÷]/g);
+    const tokens = text.replace(/ /g, '').replace(/ /g, ' ').match(/\d+|[()+−×÷]/g);
     const values = [], ops = [], steps = [];
     const PRIORITY = { '+': 1, '−': 1, '×': 2, '÷': 2 };
     const apply = () => {
@@ -50,14 +50,15 @@ for (let mask = 1; mask < 16; mask++) opSets.push(['+', '-', '*', '/'].filter((_
 
 let total = 0, failures = 0;
 const impossible = [];
-const stats = { divisionNoParens: 0, divisionAfterParens: 0, negativeAnswers: 0 };
+const stats = { divisionNoParens: 0, divisionAfterParens: 0, negativeAnswers: 0, small: { operands: 0, ones: 0 } };
 const fail = msg => { if (failures++ < 20) console.log('ОШИБКА', msg); };
 
 for (const ops of opSets)
-for (const range of [10, 20, 100, 1000])
+for (const range of [10, 20, 100, 1000, 10000, 100000, 9999999])
 for (const negatives of [false, true])
 for (const complexity of negatives ? ['all'] : ['all', 'no-carry', 'carry'])
 for (const actions of [1, 2, 3, 5, 10]) {
+    if (actions > page.maxActionsFor(range)) continue;   // больше действий интерфейс не даст выбрать
     const settings = { ops, actions, range, negatives, complexity };
     const name = `${ops.map(o => SIGN[o]).join('')} до ${range}${negatives ? ' с отрицательными' : ''} ${complexity} x${actions}`;
     for (let n = 0; n < PER_SETTING; n++) {
@@ -80,15 +81,26 @@ for (const actions of [1, 2, 3, 5, 10]) {
             }
         }
         if (!negatives && ex.text.includes('(−')) fail(`отрицательное число без настройки: ${label}`);
+        for (const group of ex.text.match(/\d+(?: \d{3})*/g)) {
+            const digits = group.replace(/ /g, '');
+            if (Number(digits) > range) fail(`число ${digits} больше предела: ${label}`);
+            const expected = Number(digits) >= 10000 ? digits.replace(/\B(?=(\d{3})+$)/g, ' ') : digits;
+            if (group !== expected) fail(`разряды разделены неверно «${group}»: ${label}`);
+        }
         if (/[+−] \d+ ÷/.test(ex.text)) stats.divisionNoParens++;
         if (/\) ÷/.test(ex.text)) stats.divisionAfterParens++;
         if (ex.answer < 0) stats.negativeAnswers++;
+        if (range <= 20) for (const s of steps) if (s.op === '+' || s.op === '−') {
+            stats.small.operands++;
+            if (Math.abs(s.b) === 1) stats.small.ones++;
+        }
     }
 }
 
 console.log(`Проверено примеров: ${total}, ошибок: ${failures}`);
 console.log(`Деление без скобок («a + b ÷ c»): ${stats.divisionNoParens}, деление скобок («(a + b) ÷ c»): ${stats.divisionAfterParens}`);
 console.log(`Отрицательных ответов: ${stats.negativeAnswers}`);
+console.log(`Доля «± 1» среди слагаемых при пределе 10 и 20: ${(100 * stats.small.ones / stats.small.operands).toFixed(1)}%`);
 if (impossible.length) console.log(`Невозможные сочетания настроек (${impossible.length}):\n  ` + impossible.join('\n  '));
 
 const show = (settings, count = 4) => Array.from({ length: count }, () => {
@@ -99,6 +111,9 @@ console.log('\nПримеры:');
 console.log('+−×÷ до 100, 2 действия:     ', show({ ops: ['+', '-', '*', '/'], actions: 2, range: 100, negatives: false, complexity: 'all' }));
 console.log('+−×÷ до 100, 5 действий:     ', show({ ops: ['+', '-', '*', '/'], actions: 5, range: 100, negatives: false, complexity: 'all' }, 2));
 console.log('+−×÷ до 1000, 10 действий:   ', show({ ops: ['+', '-', '*', '/'], actions: 10, range: 1000, negatives: false, complexity: 'all' }, 1));
+console.log('+−×÷ до 9 999 999, 2 действия:', show({ ops: ['+', '-', '*', '/'], actions: 2, range: 9999999, negatives: false, complexity: 'all' }, 3));
+console.log('+− до 20, 9 действий:         ', show({ ops: ['+', '-'], actions: 9, range: 20, negatives: false, complexity: 'all' }, 3));
+console.log('+− до 10, 2 действия:         ', show({ ops: ['+', '-'], actions: 2, range: 10, negatives: false, complexity: 'all' }, 6));
 console.log('+−×÷ до 20 с отрицательными: ', show({ ops: ['+', '-', '*', '/'], actions: 3, range: 20, negatives: true, complexity: 'all' }));
 
 process.exit(failures ? 1 : 0);

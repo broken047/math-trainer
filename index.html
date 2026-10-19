@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Математический тренажёр PRO</title>
+    <style>
+        :root {
+            --bg-color: #f0f2f5; --panel-bg: #ffffff; --text-color: #333;
+            --primary-color: #4a90e2; --success-color: #2ecc71; --error-color: #e74c3c;
+            --border-color: #ccc; --item-bg: #f8fafc; --item-border: #e2e8f0;
+        }
+        [data-theme="dark"] {
+            --bg-color: #1a1a1a; --panel-bg: #2d2d2d; --text-color: #ecf0f1;
+            --primary-color: #3498db; --success-color: #27ae60; --error-color: #c0392b;
+            --item-bg: #3a3a3a; --item-border: #4a4a4a;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', sans-serif; background-color: var(--bg-color); color: var(--text-color);
+            height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 10px; transition: background 0.3s;
+        }
+        .top-bar {
+            background: var(--panel-bg); padding: 10px 20px; border-radius: 8px;
+            display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-shrink: 0;
+        }
+        .controls-left { display: flex; gap: 10px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
+        .btn-start { background-color: var(--primary-color); color: white; }
+        .btn-check { background-color: var(--success-color); color: white; }
+        .btn-settings { background-color: #7f8c8d; color: white; }
+        .btn-theme { background-color: #f1c40f; color: #333; }
+        .btn:hover { opacity: 0.9; }
+        .workspace { display: flex; flex: 1; gap: 10px; min-height: 0; }
+        .examples-grid {
+            flex: 1; background: var(--panel-bg); border-radius: 8px; padding: 15px;
+            display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(5, 1fr); gap: 12px; align-items: center;
+        }
+        .example-item {
+            background: var(--item-bg); border: 1px solid var(--item-border); border-radius: 8px;
+            display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; height: 100%; font-weight: bold;
+        }
+        .example-text { flex: 1; text-align: right; margin-right: 12px; white-space: nowrap; }
+        .answer-input { width: 85px; padding: 8px; font-size: 18px; text-align: center; border: 2px solid var(--border-color); border-radius: 6px; outline: none; background: var(--panel-bg); color: var(--text-color); }
+        .answer-input.correct { border-color: var(--success-color); background-color: rgba(46,204,113,0.15); color: var(--success-color); }
+        .answer-input.incorrect { border-color: var(--error-color); background-color: rgba(231,76,60,0.15); }
+        .sidebar { width: 220px; background: var(--panel-bg); border-radius: 8px; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
+        .info-box { border: 1px dashed var(--border-color); border-radius: 6px; padding: 10px; text-align: center; font-size: 14px; }
+        .timer-display { font-size: 28px; font-weight: bold; font-family: monospace; }
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5);
+            display: flex; align-items: center; justify-content: center; z-index: 1000; visibility: hidden; opacity: 0; transition: opacity 0.2s;
+        }
+        .modal-overlay.active { visibility: visible; opacity: 1; }
+        .modal-content { background: var(--panel-bg); color: var(--text-color); padding: 25px; border-radius: 10px; width: 450px; max-width: 90%; display: flex; flex-direction: column; gap: 15px; }
+        .modal-header { font-size: 20px; font-weight: bold; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+        .setting-row { display: flex; flex-direction: column; gap: 5px; }
+        .setting-row label { font-weight: 500; font-size: 14px; }
+        .setting-row select, .setting-row input { padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); }
+        .checkbox-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px; }
+        .checkbox-list label { display: flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <div class="controls-left">
+            <button class="btn btn-start" onclick="generateTraining()">Старт</button>
+            <button class="btn btn-check" onclick="checkAnswers()">Проверка</button>
+            <button class="btn btn-settings" onclick="toggleModal(true)">⚙️ Настройки</button>
+        </div>
+        <button class="btn btn-theme" onclick="toggleTheme()">🌓 Тема</button>
+    </div>
+
+    <div class="workspace">
+        <div class="examples-grid" id="examples-container"></div>
+        <div class="sidebar">
+            <div class="info-box">
+                <div class="timer-display" id="timer-display">00:00</div>
+                <div style="font-size:12px; margin-top:5px;">Время тренировки</div>
+            </div>
+            <div class="info-box" style="flex: 1; display: flex; flex-direction: column; justify-content: center;">
+                <small id="hint-text">Нажмите «Старт» для начала.</small>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="settings-modal" onclick="if(event.target===this) toggleModal(false)">
+        <div class="modal-content">
+            <div class="modal-header">Настройки тренажёра</div>
+            <div class="setting-row">
+                <label>Арифметические операции:</label>
+                <div class="checkbox-list">
+                    <label><input type="checkbox" id="op-add" checked onchange="saveAllSettings()"> Сложение (+)</label>
+                    <label><input type="checkbox" id="op-sub" checked onchange="saveAllSettings()"> Вычитание (-)</label>
+                    <label><input type="checkbox" id="op-mul" onchange="saveAllSettings()"> Умножение (×)</label>
+                    <label><input type="checkbox" id="op-div" onchange="saveAllSettings()"> Деление (÷)</label>
+                </div>
+            </div>
+            <div class="setting-row">
+                <label for="actions-count">Количество действий в примере:</label>
+                <input type="number" id="actions-count" min="1" max="2" value="1" onchange="saveAllSettings()">
+            </div>
+            <div class="setting-row">
+                <label for="max-range">Предел и сложность счёта:</label>
+                <select id="max-range" onchange="adjustComplexityOptions(); saveAllSettings();">
+                    <option value="10">До 10 (однозначные)</option>
+                    <option value="20">До 20 (переход через десяток)</option>
+                    <option value="100" selected>До 100 (двузначные)</option>
+                    <option value="1000">До 1000 (трёхзначные)</option>
+                </select>
+            </div>
+            <div class="setting-row" id="complexity-container">
+                <label for="complexity-type">Тип вычислений:</label>
+                <select id="complexity-type" onchange="saveAllSettings()">
+                    <option value="all" selected>Все типы примеров</option>
+                    <option value="no-carry">Без перехода / без заимствования</option>
+                    <option value="carry">Обязательно с переходом / с заимствованием</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <label for="font-size-slider">Размер шрифта примеров:</label>
+                <input type="range" id="font-size-slider" min="18" max="32" value="24" oninput="updateFontSize(this.value); saveAllSettings();">
+            </div>
+            <button class="btn btn-start" style="margin-top:10px;" onclick="toggleModal(false); generateTraining();">Применить и Начать</button>
+        </div>
+    </div>
+    <script>
+        let currentExamples = []; let timerInterval = null; let secondsElapsed = 0;
+        let isTrainingActive = false; let currentFontSize = 24;
+
+        function toggleModal(show) { document.getElementById('settings-modal').classList.toggle('active', show); }
+
+        function toggleTheme() {
+            const body = document.body;
+            const currentTheme = body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+            body.setAttribute('data-theme', currentTheme);
+            localStorage.setItem('math_trainer_theme', currentTheme);
+        }
+
+        function updateFontSize(val) {
+            currentFontSize = val;
+            document.getElementById('font-size-slider').value = val;
+            document.querySelectorAll('.example-item').forEach(item => item.style.fontSize = val + 'px');
+        }
+
+        function adjustComplexityOptions() {
+            const range = document.getElementById('max-range').value;
+            document.getElementById('complexity-container').style.display = (range === '10') ? 'none' : 'flex';
+        }
+
+        function saveAllSettings() {
+            const config = {
+                add: document.getElementById('op-add').checked,
+                sub: document.getElementById('op-sub').checked,
+                mul: document.getElementById('op-mul').checked,
+                div: document.getElementById('op-div').checked,
+                actions: document.getElementById('actions-count').value,
+                range: document.getElementById('max-range').value,
+                complexity: document.getElementById('complexity-type').value,
+                fontSize: currentFontSize
+            };
+            localStorage.setItem('math_trainer_config', JSON.stringify(config));
+        }
+
+        function loadAllSettings() {
+            const savedTheme = localStorage.getItem('math_trainer_theme');
+            if (savedTheme) document.body.setAttribute('data-theme', savedTheme);
+
+            const savedConfig = localStorage.getItem('math_trainer_config');
+            if (savedConfig) {
+                try {
+                    const config = JSON.parse(savedConfig);
+                    document.getElementById('op-add').checked = config.add;
+                    document.getElementById('op-sub').checked = config.sub;
+                    document.getElementById('op-mul').checked = config.mul;
+                    document.getElementById('op-div').checked = config.div;
+                    document.getElementById('actions-count').value = config.actions;
+                    document.getElementById('max-range').value = config.range;
+                    document.getElementById('complexity-type').value = config.complexity;
+                    if (config.fontSize) updateFontSize(config.fontSize);
+                } catch(e) { console.error("Ошибка чтения конфига", e); }
+            }
+            adjustComplexityOptions();
+        }
+
+        function getRandomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+        function getSelectedOperations() {
+            const ops = [];
+            if (document.getElementById('op-add').checked) ops.push('+');
+            if (document.getElementById('op-sub').checked) ops.push('-');
+            if (document.getElementById('op-mul').checked) ops.push('*');
+            if (document.getElementById('op-div').checked) ops.push('/');
+            return ops;
+        }
+
+        function generateSmartAction(currentValue, op, maxRange, complexity) {
+            let nextValue = 0, attempts = 0;
+            while (attempts < 500) {
+                attempts++; let minNext = 1;
+                if (maxRange === 100 && currentValue > 10) minNext = 10;
+                if (maxRange === 1000 && currentValue > 100) minNext = 100;
+
+                if (op === '+') {
+                    nextValue = getRandomInt(minNext, maxRange - currentValue);
+                    if (nextValue <= 0 || (currentValue + nextValue) > maxRange) continue;
+                    const hasCarry = ((currentValue % 10) + (nextValue % 10)) >= 10;
+                    if (maxRange > 10 && complexity === 'no-carry' && hasCarry) continue;
+                    if (maxRange > 10 && complexity === 'carry' && !hasCarry) continue;
+                    return { text: ' + ' + nextValue, result: currentValue + nextValue };
+                }
+                else if (op === '-') {
+                    nextValue = getRandomInt(minNext, currentValue);
+                    if (nextValue <= 0 || (currentValue - nextValue) < 0) continue;
+                    const hasBorrow = (currentValue % 10) < (nextValue % 10);
+                    if (maxRange > 10 && complexity === 'no-carry' && hasBorrow) continue;
+                    if (maxRange > 10 && complexity === 'carry' && !hasBorrow) continue;
+                    return { text: ' - ' + nextValue, result: currentValue - nextValue };
+                }
+                else if (op === '*') {
+                    let limit = maxRange === 1000 ? 20 : 10; nextValue = getRandomInt(2, limit);
+                    if (nextValue > maxRange || (currentValue * nextValue) > maxRange) continue;
+                    return { text: ' × ' + nextValue, result: currentValue * nextValue };
+                }
+                else if (op === '/') {
+                    let divisors = [];
+                    for (let i = 2; i <= currentValue; i++) { if (currentValue % i === 0) divisors.push(i); }
+                    if (divisors.length === 0) continue;
+                    nextValue = divisors[Math.floor(Math.random() * divisors.length)];
+                    if (nextValue > maxRange || (currentValue / nextValue) > maxRange) continue;
+                    return { text: ' ÷ ' + nextValue, result: currentValue / nextValue };
+                }
+            }
+            return (currentValue + 1 <= maxRange) ? { text: ' + 1', result: currentValue + 1 } : { text: ' - 1', result: currentValue - 1 };
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval); secondsElapsed = 0;
+            timerInterval = setInterval(() => {
+                secondsElapsed++;
+                const mins = Math.floor(secondsElapsed / 60).toString().padStart(2, '0');
+                const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+                document.getElementById('timer-display').innerText = mins + ':' + secs;
+            }, 1000);
+        }
+
+        function generateTraining() {
+            const container = document.getElementById('examples-container');
+            container.innerHTML = ''; currentExamples = []; isTrainingActive = true;
+            const allowedOps = getSelectedOperations();
+            if (allowedOps.length === 0) { alert('Выберите операции в настройках!'); toggleModal(true); return; }
+
+            const actionsCount = parseInt(document.getElementById('actions-count').value) || 1;
+            const maxRange = parseInt(document.getElementById('max-range').value) || 100;
+            const complexity = document.getElementById('complexity-type').value;
+            startTimer(); document.getElementById('hint-text').innerText = 'Исправляйте ошибки в красных полях.';
+
+            for (let i = 0; i < 20; i++) {
+                let initialValue = 0;
+                if (maxRange === 10) initialValue = getRandomInt(1, 9);
+                else if (maxRange === 20) initialValue = getRandomInt(1, 19);
+                else if (maxRange === 100) initialValue = getRandomInt(11, 89);
+                else if (maxRange === 1000) initialValue = getRandomInt(101, 899);
+                else initialValue = getRandomInt(1, maxRange - 1);
+
+                let exampleText = initialValue.toString(); let currentAccumulator = initialValue;
+
+                for (let a = 0; a < actionsCount; a++) {
+                    let op = allowedOps[Math.floor(Math.random() * allowedOps.length)];
+                    let step = generateSmartAction(currentAccumulator, op, maxRange, complexity);
+                    exampleText += step.text; currentAccumulator = step.result;
+                }
+                currentExamples.push({ text: exampleText, answer: currentAccumulator });
+
+                const item = document.createElement('div');
+                item.className = 'example-item'; item.style.fontSize = currentFontSize + 'px';
+                item.innerHTML = '<span class="example-text">' + exampleText + ' =</span>' +
+                                 '<input type="number" class="answer-input" id="input-ans-' + i + '">';
+                container.appendChild(item);
+            }
+        }
+
+        function checkAnswers() {
+            if (currentExamples.length === 0 || !isTrainingActive) return;
+            let totalCorrect = 0;
+            currentExamples.forEach((ex, idx) => {
+                const inputEl = document.getElementById('input-ans-' + idx);
+                const userAns = parseInt(inputEl.value); inputEl.classList.remove('correct', 'incorrect');
+                if (userAns === ex.answer) {
+                    inputEl.classList.add('correct'); inputEl.disabled = true; totalCorrect++;
+                } else { inputEl.classList.add('incorrect'); }
+            });
+            if (totalCorrect === 20) {
+                clearInterval(timerInterval); isTrainingActive = false;
+                document.getElementById('hint-text').innerHTML = '<strong>Супер!</strong> Все примеры решены верно!';
+            } else { document.getElementById('hint-text').innerText = 'Правильно: ' + totalCorrect + ' из 20. Исправьте ошибки.'; }
+        }
+
+        window.onload = function() {
+            loadAllSettings();
+            generateTraining();
+        };
+    </script>
+</body>
+</html>

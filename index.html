@@ -9,7 +9,7 @@
             --bg-color: #f0f2f5; --panel-bg: #ffffff; --text-color: #333;
             --primary-color: #4a90e2; --success-color: #2ecc71; --error-color: #e74c3c;
             --border-color: #ccc; --item-bg: #f8fafc; --item-border: #e2e8f0;
-            --keyboard-height: 0px;
+            --warning-color: #e2b007; --keyboard-height: 0px;
         }
         [data-theme="dark"] {
             --bg-color: #1a1a1a; --panel-bg: #2d2d2d; --text-color: #ecf0f1;
@@ -52,6 +52,17 @@
         .answer-input { width: var(--answer-width, 4.4em); flex-shrink: 0; padding: 0.3em; font-size: 0.8em; font-weight: bold; text-align: center; border: 2px solid var(--border-color); border-radius: 6px; outline: none; background: var(--panel-bg); color: var(--text-color); }
         .answer-input.correct { border-color: var(--success-color); background-color: rgba(46,204,113,0.15); color: var(--success-color); }
         .answer-input.incorrect { border-color: var(--error-color); background-color: rgba(231,76,60,0.15); }
+        .answer-input.almost { border-color: var(--warning-color); background-color: rgba(241,196,15,0.2); }
+        /* Обыкновенная дробь в примере: числитель над чертой, знаменатель под ней */
+        .frac { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; font-size: 0.75em; line-height: 1.15; margin: 0 0.1em; }
+        .frac > span { padding: 0 0.15em; }
+        .frac > span:first-child { border-bottom: 0.1em solid currentColor; }
+        /* Ответ обыкновенной дробью: целая часть, справа числитель над знаменателем */
+        .frac-answer { display: inline-flex; align-items: center; gap: 0.25em; flex-shrink: 0; }
+        .frac-input { display: inline-flex; flex-direction: column; align-items: center; gap: 0.15em; }
+        .frac-input .answer-input { width: 2.9em; padding: 0.1em; font-size: 0.7em; }
+        .frac-bar { width: 100%; border-top: 0.1em solid currentColor; }
+        .frac-answer .answer-whole { width: min(var(--answer-width, 4.4em), 3.6em); }
         .sign-toggle { flex-shrink: 0; width: 1.7em; height: 1.7em; font-size: 0.7em; font-weight: bold; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); color: var(--text-color); cursor: pointer; }
         .sidebar { width: 220px; background: var(--panel-bg); border-radius: 8px; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
         .info-box { border: 1px dashed var(--border-color); border-radius: 6px; padding: 10px; text-align: center; font-size: 14px; }
@@ -135,7 +146,28 @@
                 </select>
             </div>
             <div class="setting-row">
-                <label class="checkbox-row"><input type="checkbox" id="opt-negatives" onchange="adjustOptions(); saveAllSettings();"> Отрицательные числа</label>
+                <label>Числа:</label>
+                <div class="checkbox-list">
+                    <label><input type="checkbox" id="opt-negatives" onchange="adjustOptions(); saveAllSettings();"> Отрицательные</label>
+                    <label><input type="checkbox" id="opt-fractions" onchange="adjustOptions(); saveAllSettings();"> Обыкновенные дроби</label>
+                    <label><input type="checkbox" id="opt-decimals" onchange="adjustOptions(); saveAllSettings();"> Десятичные дроби</label>
+                </div>
+            </div>
+            <div class="setting-row" id="fraction-options">
+                <label for="fraction-denominators">Знаменатели обыкновенных дробей:</label>
+                <select id="fraction-denominators" onchange="saveAllSettings()">
+                    <option value="same" selected>Одинаковые в примере</option>
+                    <option value="different">Разные</option>
+                </select>
+                <label class="checkbox-row"><input type="checkbox" id="opt-strict-fractions" checked onchange="saveAllSettings()"> Ответ — несократимая дробь с выделенной целой частью</label>
+            </div>
+            <div class="setting-row" id="decimal-options">
+                <label for="decimal-places">Знаков после запятой:</label>
+                <select id="decimal-places" onchange="saveAllSettings()">
+                    <option value="1" selected>1 (десятые)</option>
+                    <option value="2">До 2 (сотые)</option>
+                    <option value="3">До 3 (тысячные)</option>
+                </select>
             </div>
             <div class="setting-row" id="complexity-container">
                 <label for="complexity-type">Тип вычислений:</label>
@@ -150,7 +182,7 @@
     </div>
     <script>
         let currentExamples = []; let timerInterval = null; let secondsElapsed = 0;
-        let isTrainingActive = false;
+        let isTrainingActive = false; let currentSettings = null;
         const EXAMPLES_COUNT = 20;
         // Чем длиннее числа, тем меньше действий: семизначные в уме в десять действий никто не считает
         const MAX_ACTIONS_BY_RANGE = { 10000: 5, 100000: 4, 9999999: 3 };
@@ -161,6 +193,12 @@
         const NEGATIVE_SHARE = 0.3;     // доля отрицательных чисел, когда они включены
         const PARENS_SHARE = 0.35;      // доля «(a + b) × c» среди умножений и делений после сложения
         const ONE_SHARE = 0.25;         // «± 1» выпадает в 4 раза реже других чисел
+        const GENERATION_BUDGET_MS = 300; // не дольше этого на один пример
+        const INT_SHARE = 0.25;        // доля целых чисел, когда включены дроби
+        const MIXED_SHARE = 0.3;        // доля смешанных чисел («2 3/4») среди обыкновенных дробей
+        const MAX_FRACTION_DEN = 10;    // знаменатели дробей в примере — от 2 до 10
+        const MAX_DENOMINATOR = 100;    // наибольший знаменатель ответа и промежуточных результатов
+        const MIXED_SEPARATOR = '\u2009'; // между целой и дробной частью в текстовой записи «2 3/4»
 
         function toggleModal(show) { document.getElementById('settings-modal').classList.toggle('active', show); }
 
@@ -176,8 +214,12 @@
             if (!rangeSelect.value) rangeSelect.value = '100';   // сохранён предел, которого больше нет в списке
             const range = rangeSelect.value;
             const negatives = document.getElementById('opt-negatives').checked;
-            // Переход через разряд имеет смысл только для неотрицательных чисел и чисел больше 10
-            document.getElementById('complexity-container').style.display = (range === '10' || negatives) ? 'none' : 'flex';
+            const fractions = document.getElementById('opt-fractions').checked;
+            const decimals = document.getElementById('opt-decimals').checked;
+            // Переход через разряд имеет смысл только для целых неотрицательных чисел больше 10
+            document.getElementById('complexity-container').style.display = (range === '10' || negatives || fractions || decimals) ? 'none' : 'flex';
+            document.getElementById('fraction-options').style.display = fractions ? 'flex' : 'none';
+            document.getElementById('decimal-options').style.display = decimals ? 'flex' : 'none';
 
             const maxActions = maxActionsFor(parseInt(range));
             const actionsInput = document.getElementById('actions-count');
@@ -195,6 +237,11 @@
                 actions: document.getElementById('actions-count').value,
                 range: document.getElementById('max-range').value,
                 negatives: document.getElementById('opt-negatives').checked,
+                fractions: document.getElementById('opt-fractions').checked,
+                denominators: document.getElementById('fraction-denominators').value,
+                strictFractions: document.getElementById('opt-strict-fractions').checked,
+                decimals: document.getElementById('opt-decimals').checked,
+                decimalPlaces: document.getElementById('decimal-places').value,
                 complexity: document.getElementById('complexity-type').value
             };
             localStorage.setItem('math_trainer_config', JSON.stringify(config));
@@ -215,6 +262,11 @@
                     document.getElementById('actions-count').value = config.actions;
                     document.getElementById('max-range').value = config.range;
                     document.getElementById('opt-negatives').checked = !!config.negatives;
+                    document.getElementById('opt-fractions').checked = !!config.fractions;
+                    document.getElementById('fraction-denominators').value = config.denominators || 'same';
+                    document.getElementById('opt-strict-fractions').checked = config.strictFractions !== false;
+                    document.getElementById('opt-decimals').checked = !!config.decimals;
+                    document.getElementById('decimal-places').value = config.decimalPlaces || '1';
                     document.getElementById('complexity-type').value = config.complexity;
                 } catch(e) { console.error("Ошибка чтения конфига", e); }
             }
@@ -239,8 +291,37 @@
                                   maxActionsFor(parseInt(document.getElementById('max-range').value))),
                 range: parseInt(document.getElementById('max-range').value) || 100,
                 negatives: document.getElementById('opt-negatives').checked,
+                fractions: document.getElementById('opt-fractions').checked,
+                sameDenominators: document.getElementById('fraction-denominators').value === 'same',
+                strictFractions: document.getElementById('opt-strict-fractions').checked,
+                decimals: document.getElementById('opt-decimals').checked,
+                decimalPlaces: parseInt(document.getElementById('decimal-places').value) || 1,
                 complexity: document.getElementById('complexity-type').value
             };
+        }
+
+        // ---- Точная арифметика: число — несократимая дробь { n, d }, d > 0; целые — со знаменателем 1 ----
+        function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) [a, b] = [b, a % b]; return a; }
+        function rat(n, d = 1) {
+            if (d < 0) { n = -n; d = -d; }
+            const g = gcd(n, d) || 1;
+            return { n: n / g + 0, d: d / g };
+        }
+        const ratAdd = (a, b) => rat(a.n * b.d + b.n * a.d, a.d * b.d);
+        const ratMul = (a, b) => rat(a.n * b.n, a.d * b.d);
+        const ratDiv = (a, b) => rat(a.n * b.d, a.d * b.n);
+        const ratNeg = a => rat(-a.n, a.d);
+        const ratAbs = a => rat(Math.abs(a.n), a.d);
+        const ratCmp = (a, b) => a.n * b.d - b.n * a.d;
+        const ratFloor = a => Math.floor(a.n / a.d);
+        const ratEq = (a, b) => a.n === b.n && a.d === b.d;
+
+        // Сколько знаков после запятой у десятичной записи; Infinity — если дробь бесконечная (1/3)
+        function decimalPlaces(a) {
+            let d = a.d, twos = 0, fives = 0;
+            while (d % 2 === 0) { d /= 2; twos++; }
+            while (d % 5 === 0) { d /= 5; fives++; }
+            return d === 1 ? Math.max(twos, fives) : Infinity;
         }
 
         // Есть ли переход через разряд хотя бы в одном разряде (единицы, десятки, ...)
@@ -259,15 +340,31 @@
             return false;
         }
 
+        // Тип вычислений действует только для целых неотрицательных чисел больше 10
+        function complexityApplies(settings) {
+            return settings.range > 10 && !settings.negatives && !settings.fractions && !settings.decimals
+                && settings.complexity !== 'all';
+        }
+
         // Подходит ли сложение или вычитание total ± value под выбранный тип вычислений
         function transitionAllowed(total, sign, value, settings) {
-            if (settings.range <= 10 || settings.negatives || settings.complexity === 'all') return true;
-            const transition = sign > 0 ? hasCarry(total, value) : hasBorrow(total, value);
+            if (!complexityApplies(settings)) return true;
+            const transition = sign > 0 ? hasCarry(total.n, value.n) : hasBorrow(total.n, value.n);
             return settings.complexity === 'carry' ? transition : !transition;
         }
 
         function inRange(value, settings) {
-            return value <= settings.range && value >= (settings.negatives ? -settings.range : 0);
+            return ratCmp(value, rat(settings.range)) <= 0
+                && ratCmp(value, rat(settings.negatives ? -settings.range : 0)) >= 0;
+        }
+
+        // Значение можно записать так, как пишут числа в этом примере: с обыкновенными дробями
+        // знаменатель не больше MAX_DENOMINATOR, только с десятичными — не больше выбранного
+        // числа знаков после запятой, а без дробей — целое
+        function fitsNotation(value, kinds, settings) {
+            if (kinds.frac) return value.d <= MAX_DENOMINATOR;
+            if (kinds.dec) return decimalPlaces(value) <= settings.decimalPlaces;
+            return value.d === 1;
         }
 
         // Числа от 10 000 пишутся с разделением разрядов: «456 789»
@@ -275,9 +372,80 @@
             const text = String(Math.abs(value));
             return Math.abs(value) >= 10000 ? text.replace(/\B(?=(\d{3})+$)/g, THIN_NBSP) : text;
         }
-        function formatFirst(value) { return value < 0 ? '−' + formatNumber(value) : formatNumber(value); }
-        function formatOperand(value) { return value < 0 ? '(−' + formatNumber(value) + ')' : formatNumber(value); }
+
+        // Десятичная дробь через запятую: «3,75»
+        function formatDecimal(value) {
+            const places = decimalPlaces(value);
+            const digits = String(Math.abs(value.n) * Math.pow(10, places) / value.d).padStart(places + 1, '0');
+            const whole = formatNumber(Number(digits.slice(0, digits.length - places)));
+            return places ? whole + ',' + digits.slice(-places) : whole;
+        }
+
+        /*
+         * Число в примере — operand: { kind, value, whole, num, den }.
+         * kind: 'int' — целое, 'frac' — обыкновенная дробь (whole — целая часть смешанного числа,
+         * num/den — дробная часть как она написана, без сокращения), 'dec' — десятичная дробь.
+         * Возвращает запись числа без знака: html — с чертой дроби, text — строкой «2 3/4».
+         */
+        function renderAbs(operand) {
+            if (operand.kind === 'frac') {
+                const whole = operand.whole ? formatNumber(operand.whole) : '';
+                return {
+                    html: whole + '<span class="frac"><span>' + operand.num + '</span><span>' + operand.den + '</span></span>',
+                    text: (whole ? whole + MIXED_SEPARATOR : '') + operand.num + '/' + operand.den
+                };
+            }
+            const text = operand.kind === 'dec' ? formatDecimal(operand.value) : formatNumber(operand.value.n);
+            return { html: text, text };
+        }
+
+        // Отрицательное число в начале примера пишется «−5», внутри — в скобках «(−5)»
+        function renderOperand(operand, isFirst) {
+            const abs = renderAbs(operand);
+            if (operand.value.n >= 0) return abs;
+            const wrap = s => isFirst ? '−' + s : '(−' + s + ')';
+            return { html: wrap(abs.html), text: wrap(abs.text) };
+        }
+
+        function withSign(operand, sign) {
+            return sign > 0 ? operand : Object.assign({}, operand, { value: ratNeg(operand.value) });
+        }
+
         function randomSign(settings) { return settings.negatives && Math.random() < NEGATIVE_SHARE ? -1 : 1; }
+
+        // Какое число поставить: при включённых дробях четверть чисел — целые
+        function pickKind(settings) {
+            const kinds = [];
+            if (settings.fractions) kinds.push('frac');
+            if (settings.decimals) kinds.push('dec');
+            if (!kinds.length || Math.random() < INT_SHARE) return 'int';
+            return kinds[getRandomInt(0, kinds.length - 1)];
+        }
+
+        // Обыкновенная дробь не больше max: правильная или смешанное число.
+        // В режиме одинаковых знаменателей у всех дробей примера знаменатель state.den («2/8 + 3/8»),
+        // в режиме разных дроби несократимые, как в учебнике
+        function randomFraction(settings, state, max) {
+            const den = settings.sameDenominators ? state.den : getRandomInt(2, MAX_FRACTION_DEN);
+            let num = getRandomInt(1, den - 1);
+            while (!settings.sameDenominators && gcd(num, den) > 1) num = getRandomInt(1, den - 1);
+            const maxWhole = ratFloor(ratAdd(max, rat(-num, den)));
+            if (maxWhole < 0) return null;
+            const whole = Math.random() < MIXED_SHARE ? getRandomInt(1, Math.max(1, maxWhole)) : 0;
+            if (whole > maxWhole) return null;
+            return { kind: 'frac', whole, num, den, value: rat(whole * den + num, den) };
+        }
+
+        // Десятичная дробь не больше max, от 1 знака после запятой до выбранного в настройках
+        function randomDecimal(settings, max) {
+            const scale = Math.pow(10, getRandomInt(1, settings.decimalPlaces));
+            const maxScaled = ratFloor(ratMul(max, rat(scale)));
+            for (let attempt = 0; attempt < 5 && maxScaled >= 1; attempt++) {
+                const scaled = getRandomInt(1, maxScaled);
+                if (scaled % 10) return { kind: 'dec', value: rat(scaled, scale) };   // не «2,50» и не «3,0»
+            }
+            return null;
+        }
 
         // Единица старшего разряда, на разряд меньше предела: до 100 — 10, до 1000 — 100, до 9 999 999 — 1 000 000
         function lowerUnit(range) { return Math.pow(10, Math.floor(Math.log10(range + 1)) - 1); }
@@ -297,37 +465,61 @@
          * «12 + 3 × 4 − 10 ÷ 5» — это слагаемые 12, +(3 × 4) и −(10 ÷ 5).
          * Умножение и деление применяются либо к последнему слагаемому («2 + 6 ÷ 2»),
          * либо ко всему примеру в скобках («(2 + 6) ÷ 2»).
-         * state: { terms: [{ sign, text, value, plain }], total }; plain — слагаемое из одного числа
+         * state: { terms: [{ sign, html, text, value, operand }], total, kinds, den };
+         * operand есть у слагаемого из одного числа, kinds — какие дроби уже есть в примере
          */
-        function termsText(terms) {
-            return terms.map((t, i) => i === 0 ? t.text : ' ' + (t.sign > 0 ? '+' : '−') + NBSP + t.text).join('');
+        function termsJoin(terms, field) {
+            return terms.map((t, i) => i === 0 ? t[field] : ' ' + (t.sign > 0 ? '+' : '−') + NBSP + t[field]).join('');
+        }
+
+        function withKind(kinds, kind) {
+            return kind === 'int' ? kinds : Object.assign({}, kinds, { [kind]: true });
         }
 
         // При пределе от 100 к многозначному числу прибавляется число не меньше lowerUnit:
         // до 100 — от 10, до 1000 — от 100 и т. д.
         function minOperand(total, settings) {
             const unit = lowerUnit(settings.range);
-            return settings.range >= 100 && Math.abs(total) > unit ? unit : 1;
+            return settings.range >= 100 && Math.abs(ratFloor(total)) > unit ? unit : 1;
         }
 
         function transitionFree(settings) {
-            return settings.range > 10 && !settings.negatives && settings.complexity === 'no-carry';
+            return complexityApplies(settings) && settings.complexity === 'no-carry';
         }
 
         // Число от min до max без перехода через разряд: каждая цифра подбирается так,
         // чтобы в своём разряде не было переноса (сложение) или заёма (вычитание).
-        // Случайным перебором такое многозначное число почти не найти
+        // Случайным перебором такое многозначное число почти не найти.
+        // Пока старшие цифры совпадают с цифрами max (tight), следующая не больше цифры max — число не превысит max
         function randomWithoutTransition(total, sign, min, max) {
             const digits = String(max).length;
             for (let attempt = 0; attempt < 20; attempt++) {
-                let value = 0;
+                let value = 0, tight = true;
                 for (let i = digits - 1; i >= 0; i--) {
-                    const totalDigit = Math.floor(total / Math.pow(10, i)) % 10;
-                    value = value * 10 + getRandomInt(0, sign > 0 ? 9 - totalDigit : totalDigit);
+                    const unit = Math.pow(10, i);
+                    const totalDigit = Math.floor(total / unit) % 10;
+                    const maxDigit = Math.floor(max / unit) % 10;
+                    const limit = sign > 0 ? 9 - totalDigit : totalDigit;
+                    const digit = getRandomInt(0, tight ? Math.min(limit, maxDigit) : limit);
+                    if (digit < maxDigit) tight = false;
+                    value = value * 10 + digit;
                 }
-                if (value >= min && value <= max) return value;
+                if (value >= min) return value;
             }
             return null;
+        }
+
+        // Целое слагаемое от 1 до max (max — дробь), или null
+        function randomIntOperand(state, sign, max, settings) {
+            const maxInt = ratFloor(max);
+            if (maxInt < 1) return null;
+            const min = Math.min(minOperand(state.total, settings), maxInt);
+            const value = transitionFree(settings)
+                ? randomWithoutTransition(state.total.n, sign, min, maxInt)
+                : getRandomInt(min, maxInt);
+            // «+ 1» и «− 1» нужны, но изредка: большинство единиц отбрасывается
+            if (value === null || (value === 1 && Math.random() > ONE_SHARE)) return null;
+            return { kind: 'int', value: rat(value) };
         }
 
         // remaining — сколько действий ещё впереди
@@ -338,24 +530,30 @@
             // в него упрётся. При смешанных + и − сумма колеблется сама, и запас не нужен
             const oneWay = !settings.negatives && !settings.ops.includes(op === '+' ? '-' : '+');
             for (let attempt = 0; attempt < 20; attempt++) {
+                const kind = pickKind(settings);
                 const operandSign = randomSign(settings);
                 // Насколько можно сдвинуть сумму в нужную сторону, не выходя за пределы счёта
-                const direction = sign * operandSign;
-                const maxMagnitude = Math.min(settings.range, direction > 0 ? settings.range - state.total
-                                                                            : state.total + (settings.negatives ? settings.range : 0));
-                const max = oneWay ? Math.floor(maxMagnitude / (remaining + 1)) : maxMagnitude;
-                if (max < 1) continue;
-                const min = Math.min(minOperand(state.total, settings), max);
-                const value = transitionFree(settings)
-                    ? randomWithoutTransition(state.total, sign, min, max)
-                    : operandSign * getRandomInt(min, max);
-                // «+ 1» и «− 1» нужны, но изредка: большинство единиц отбрасывается
-                if (Math.abs(value) === 1 && Math.random() > ONE_SHARE) continue;
-                if (value === null) continue;
-                if (!transitionAllowed(state.total, sign, value, settings)) continue;
+                const room = sign * operandSign > 0
+                    ? ratAdd(rat(settings.range), ratNeg(state.total))
+                    : ratAdd(state.total, rat(settings.negatives ? settings.range : 0));
+                let max = ratCmp(room, rat(settings.range)) < 0 ? room : rat(settings.range);
+                if (oneWay) max = ratDiv(max, rat(remaining + 1));
+                if (max.n <= 0) continue;
+
+                let operand = kind === 'int' ? randomIntOperand(state, sign, max, settings)
+                            : kind === 'frac' ? randomFraction(settings, state, max)
+                            : randomDecimal(settings, max);
+                if (!operand) continue;
+                operand = withSign(operand, operandSign);
+                if (!transitionAllowed(state.total, sign, operand.value, settings)) continue;
+
+                const total = ratAdd(state.total, sign > 0 ? operand.value : ratNeg(operand.value));
+                const kinds = withKind(state.kinds, kind);
+                if (!inRange(total, settings) || !fitsNotation(total, kinds, settings)) continue;
+                const shown = renderOperand(operand, false);
                 return {
-                    terms: [...state.terms, { sign, text: formatOperand(value), value, plain: true }],
-                    total: state.total + sign * value
+                    terms: [...state.terms, { sign, html: shown.html, text: shown.text, value: operand.value, operand }],
+                    total, kinds, den: state.den
                 };
             }
             return null;
@@ -367,22 +565,27 @@
             return settings.range === 1000 ? 20 : 99;
         }
 
-        // Число перед × или ÷ подбирается заново под множитель или делитель: «7 × 8», «56 ÷ 8».
+        // Целое число перед × или ÷ подбирается заново под множитель или делитель: «7 × 8», «56 ÷ 8».
         // Знак числа сохраняется
         function rebuildPlain(base, op, settings, isFirst) {
             const factor = randomSign(settings) * getRandomInt(2, factorLimit(settings));
             const maxQuotient = Math.floor(settings.range / Math.abs(factor));
             if (maxQuotient < 2) return null;
             const n = getRandomInt(2, maxQuotient);
-            const number = Math.sign(base.value || 1) * (op === '*' ? n : n * Math.abs(factor));
-            const value = op === '*' ? number * factor : number / factor;
-            const text = (isFirst ? formatFirst(number) : formatOperand(number)) + ' ' + OP_SIGNS[op] + NBSP + formatOperand(factor);
-            return { sign: base.sign, text, value };
+            const number = (base.value.n < 0 ? -1 : 1) * (op === '*' ? n : n * Math.abs(factor));
+            const left = renderOperand({ kind: 'int', value: rat(number) }, isFirst);
+            const right = renderOperand({ kind: 'int', value: rat(factor) }, false);
+            return {
+                sign: base.sign,
+                html: left.html + ' ' + OP_SIGNS[op] + NBSP + right.html,
+                text: left.text + ' ' + OP_SIGNS[op] + NBSP + right.text,
+                value: op === '*' ? rat(number * factor) : rat(number / factor)
+            };
         }
 
-        // Множитель и делитель от 2 до factorLimit, частное по модулю не меньше 2:
+        // Целый множитель или делитель целого числа от 2 до factorLimit, частное по модулю не меньше 2:
         // без «13 ÷ 13» и «450 ÷ 225»
-        function pickFactor(base, op, settings) {
+        function pickIntFactor(base, op, settings) {
             const limit = factorLimit(settings);
             const sign = randomSign(settings);
             if (op === '*') {
@@ -397,38 +600,85 @@
             return divisors.length ? sign * divisors[getRandomInt(0, divisors.length - 1)] : null;
         }
 
+        // Множитель или делитель для base любого вида: целый, обыкновенная или десятичная дробь
+        function pickFactor(base, op, settings) {
+            let kind = pickKind(settings);
+            // С одинаковыми знаменателями тренируют сложение и вычитание дробей: умножают и делят на целое
+            if (kind === 'frac' && settings.sameDenominators) kind = 'int';
+            let operand;
+            if (kind === 'int') {
+                const value = base.d === 1 ? pickIntFactor(base.n, op, settings)
+                                           : randomSign(settings) * getRandomInt(2, factorLimit(settings));
+                if (value === null) return null;
+                operand = { kind, value: rat(value) };
+            } else {
+                const max = rat(op === '*' ? 3 : factorLimit(settings));
+                operand = kind === 'frac' ? randomFraction(settings, { den: 0 }, max) : randomDecimal(settings, max);
+                if (!operand) return null;
+                operand = withSign(operand, randomSign(settings));
+            }
+            return operand;
+        }
+
         function tryMultiplicative(state, op, settings) {
             const wrap = state.terms.length > 1 && Math.random() < PARENS_SHARE;
-            const base = wrap ? { sign: 1, text: '(' + termsText(state.terms) + ')', value: state.total }
+            const base = wrap ? { sign: 1, html: '(' + termsJoin(state.terms, 'html') + ')', text: '(' + termsJoin(state.terms, 'text') + ')', value: state.total }
                               : state.terms[state.terms.length - 1];
             const rest = wrap ? [] : state.terms.slice(0, -1);
 
-            let term;
-            if (base.plain && (op === '/' || Math.random() < 0.5)) {
+            let term, kinds = state.kinds;
+            if (base.operand && base.operand.kind === 'int' && pickKind(settings) === 'int' && (op === '/' || Math.random() < 0.5)) {
                 term = rebuildPlain(base, op, settings, rest.length === 0);
             } else {
                 const factor = pickFactor(base.value, op, settings);
-                if (factor !== null) term = {
-                    sign: base.sign,
-                    text: base.text + ' ' + OP_SIGNS[op] + NBSP + formatOperand(factor),
-                    value: op === '*' ? base.value * factor : base.value / factor
-                };
+                if (factor) {
+                    const shown = renderOperand(factor, false);
+                    term = {
+                        sign: base.sign,
+                        html: base.html + ' ' + OP_SIGNS[op] + NBSP + shown.html,
+                        text: base.text + ' ' + OP_SIGNS[op] + NBSP + shown.text,
+                        value: op === '*' ? ratMul(base.value, factor.value) : ratDiv(base.value, factor.value)
+                    };
+                    kinds = withKind(kinds, factor.kind);
+                }
             }
             if (!term) return null;
 
-            const restTotal = rest.reduce((sum, t) => sum + t.sign * t.value, 0);
-            const total = restTotal + term.sign * term.value;
-            if (Math.abs(term.value) > settings.range || !inRange(total, settings)) return null;
+            const restTotal = rest.reduce((sum, t) => ratAdd(sum, t.sign > 0 ? t.value : ratNeg(t.value)), rat(0));
+            const total = ratAdd(restTotal, term.sign > 0 ? term.value : ratNeg(term.value));
+            if (ratCmp(ratAbs(term.value), rat(settings.range)) > 0 || !inRange(total, settings)) return null;
+            if (!fitsNotation(term.value, kinds, settings) || !fitsNotation(total, kinds, settings)) return null;
             if (rest.length && !transitionAllowed(restTotal, term.sign, term.value, settings)) return null;
-            return { terms: [...rest, term], total };
+            return { terms: [...rest, term], total, kinds, den: state.den };
+        }
+
+        function startState(settings) {
+            const state = { terms: [], total: rat(0), kinds: {}, den: getRandomInt(2, MAX_FRACTION_DEN) };
+            const kind = pickKind(settings);
+            const max = rat(settings.range);
+            let operand = kind === 'int' ? { kind, value: rat(getInitialValue(settings)) }
+                        : kind === 'frac' ? randomFraction(settings, state, max)
+                        : randomDecimal(settings, max);
+            if (!operand) return null;
+            operand = withSign(operand, randomSign(settings));
+            const shown = renderOperand(operand, true);
+            state.terms.push({ sign: 1, html: shown.html, text: shown.text, value: operand.value, operand });
+            state.total = operand.value;
+            state.kinds = withKind(state.kinds, kind);
+            return state;
         }
 
         // Если действие не получилось, пробуется другое из выбранных, а если не выходит и так,
-        // пример собирается заново: невыбранные операции в нём не появляются
+        // пример собирается заново: невыбранные операции в нём не появляются.
+        // При включённых дробях в каждом примере есть хотя бы одна дробь.
+        // answerKind — как вводить ответ: 'frac' — обыкновенной дробью, 'dec' — десятичной, 'int' — целым
         function generateExample(settings) {
-            for (let attempt = 0; attempt < 300; attempt++) {
-                const first = randomSign(settings) * getInitialValue(settings);
-                let state = { terms: [{ sign: 1, text: formatFirst(first), value: first, plain: true }], total: first };
+            const needFraction = settings.fractions || settings.decimals;
+            // Чтобы при невозможных настройках сообщение появилось сразу, а не через полминуты
+            const deadline = Date.now() + GENERATION_BUDGET_MS;
+            for (let attempt = 0; attempt < 300 && Date.now() < deadline; attempt++) {
+                let state = startState(settings);
+                if (!state) continue;
                 let done = 0;
 
                 for (; done < settings.actions; done++) {
@@ -441,7 +691,13 @@
                     if (!next) break;
                     state = next;
                 }
-                if (done === settings.actions) return { text: termsText(state.terms), answer: state.total };
+                if (done < settings.actions || (needFraction && !state.kinds.frac && !state.kinds.dec)) continue;
+                return {
+                    html: termsJoin(state.terms, 'html'),
+                    text: termsJoin(state.terms, 'text'),
+                    answer: state.total,
+                    answerKind: state.kinds.frac ? 'frac' : state.kinds.dec ? 'dec' : 'int'
+                };
             }
             return null;
         }
@@ -454,6 +710,17 @@
                 const secs = (secondsElapsed % 60).toString().padStart(2, '0');
                 document.getElementById('timer-display').innerText = mins + ':' + secs;
             }, 1000);
+        }
+
+        // Ответ обыкновенной дробью — три поля: целая часть, числитель над знаменателем
+        function answerFieldsHtml(example) {
+            const field = (cls, mode) => '<input type="text" inputmode="' + mode + '" enterkeyhint="next" autocomplete="off" class="answer-input ' + cls + '">';
+            if (example.answerKind === 'frac') {
+                return '<span class="frac-answer">' + field('answer-whole', 'decimal') +
+                       '<span class="frac-input">' + field('answer-num', 'numeric') + '<span class="frac-bar"></span>' +
+                       field('answer-den', 'numeric') + '</span></span>';
+            }
+            return field('answer-single', example.answerKind === 'dec' ? 'decimal' : 'numeric');
         }
 
         function generateTraining() {
@@ -473,22 +740,28 @@
                 }
                 currentExamples.push(example);
             }
+            currentSettings = settings;
 
-            // Поле ответа вмещает все цифры предела и минус
-            const answerChars = String(settings.range).length + (settings.negatives ? 1 : 0);
+            // Поле ответа вмещает все цифры предела, минус и знаки после запятой
+            const answerChars = String(settings.range).length + (settings.negatives ? 1 : 0) +
+                                (settings.decimals ? settings.decimalPlaces + 1 : 0);
             container.style.setProperty('--answer-width', Math.max(4.4, answerChars * 0.75 + 1).toFixed(2) + 'em');
 
-            currentExamples.forEach((example, i) => {
+            currentExamples.forEach(example => {
                 const item = document.createElement('div');
                 item.className = 'example-item';
-                item.innerHTML = '<span class="example-text">' + example.text + NBSP + '=</span>' +
+                item.innerHTML = '<span class="example-text">' + example.html + NBSP + '=</span>' +
                                  (settings.negatives ? '<button type="button" class="sign-toggle" tabindex="-1" title="Сменить знак ответа">±</button>' : '') +
-                                 '<input type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" class="answer-input" id="input-ans-' + i + '">';
+                                 answerFieldsHtml(example);
+                item.querySelector('.example-text').setAttribute('aria-label', example.text + ' =');
                 container.appendChild(item);
             });
             fitColumnsToExamples(container);
             isTrainingActive = true;
-            startTimer(); document.getElementById('hint-text').innerText = 'Решите примеры и нажмите «Проверка».';
+            let hint = 'Решите примеры и нажмите «Проверка».';
+            if (currentExamples.some(ex => ex.answerKind === 'frac')) hint += ' Дробь вводится в три поля: целая часть, числитель и знаменатель.';
+            if (currentExamples.some(ex => ex.answerKind !== 'int')) hint += ' Десятичную дробь можно писать через запятую или точку.';
+            startTimer(); document.getElementById('hint-text').innerText = hint;
         }
 
         // Ширина колонки — по самому длинному примеру в одну строку, но не больше 34em:
@@ -501,22 +774,72 @@
             container.style.setProperty('--col-min', Math.min(widest / fontSize + 0.2, 34).toFixed(2) + 'em');
         }
 
-        // Принимает «-5», «−5» и «12 345»; всё, что не целое число, считается ошибкой
-        function parseAnswer(raw) {
-            const text = raw.replace(/[−–]/g, '-').replace(/\s/g, '');
-            return /^-?\d+$/.test(text) ? Number(text) : NaN;
+        // Целое или десятичное число: «-5», «−5», «12 345», «3,75», «3.75». Иначе null
+        function parseNumberText(raw) {
+            const text = raw.replace(/[−–]/g, '-').replace(/\s/g, '').replace(',', '.');
+            const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(text);
+            if (!match) return null;
+            const fraction = match[3] || '';
+            const value = rat(Number(match[2] + fraction), Math.pow(10, fraction.length));
+            return match[1] ? ratNeg(value) : value;
+        }
+
+        /*
+         * Читает ответ из полей примера. Возвращает { empty } или { value, form }, где form —
+         * как ответ записан: целая часть, числитель и знаменатель (для проверки сокращения).
+         * value === null — записано не число
+         */
+        function readAnswer(item) {
+            const get = cls => { const el = item.querySelector('.' + cls); return el ? el.value.trim() : ''; };
+            if (!item.querySelector('.answer-whole')) {
+                const raw = get('answer-single');
+                return raw === '' ? { empty: true } : { value: parseNumberText(raw) };
+            }
+            const whole = get('answer-whole'), num = get('answer-num'), den = get('answer-den');
+            if (!whole && !num && !den) return { empty: true };
+            if (!num && !den) return { value: parseNumberText(whole), form: { decimal: /[.,]/.test(whole) } };
+
+            const clean = s => s.replace(/[−–]/g, '-').replace(/\s/g, '');
+            const w = clean(whole), n = clean(num), d = clean(den);
+            if (!/^-?\d*$/.test(w) || !/^-?\d+$/.test(n) || !/^\d+$/.test(d) || Number(d) === 0) return { value: null };
+            const negative = w.startsWith('-') || n.startsWith('-');
+            const W = Math.abs(Number(w || 0)), N = Math.abs(Number(n)), D = Number(d);
+            const value = rat(W * D + N, D);
+            return { value: negative ? ratNeg(value) : value, form: { whole: W, num: N, den: D } };
+        }
+
+        // Записан ли верный ответ так, как требуют в школе: дробь несократимая, целая часть выделена.
+        // Возвращает null, если записан правильно, или подсказку, что исправить
+        function fractionFormIssue(answer, form) {
+            if (form.decimal) return 'запишите ответ обыкновенной дробью';
+            if (!form.den) return null;                       // записано целым числом
+            if (form.num === 0) return 'дробная часть равна нулю — запишите целым числом';
+            if (gcd(form.num, form.den) > 1) return 'сократите дробь';
+            if (form.num >= form.den) return 'выделите целую часть';
+            return null;
+        }
+
+        function markAnswer(item, state, title) {
+            item.querySelectorAll('.answer-input').forEach(el => {
+                el.classList.remove('correct', 'incorrect', 'almost');
+                if (state) el.classList.add(state);
+                if (state === 'correct') el.disabled = true;
+            });
+            if (title) item.title = 'Почти верно: ' + title; else item.removeAttribute('title');
         }
 
         function checkAnswers() {
             if (currentExamples.length === 0 || !isTrainingActive) return;
-            let totalCorrect = 0, totalWrong = 0, totalEmpty = 0;
+            let totalCorrect = 0, totalWrong = 0, totalEmpty = 0, totalAlmost = 0;
+            const items = document.getElementById('examples-container').children;
             currentExamples.forEach((ex, idx) => {
-                const inputEl = document.getElementById('input-ans-' + idx);
-                const raw = inputEl.value.trim(); inputEl.classList.remove('correct', 'incorrect');
-                if (raw === '') { totalEmpty++; return; }
-                if (parseAnswer(raw) === ex.answer) {
-                    inputEl.classList.add('correct'); inputEl.disabled = true; totalCorrect++;
-                } else { inputEl.classList.add('incorrect'); totalWrong++; }
+                const item = items[idx];
+                const answer = readAnswer(item);
+                if (answer.empty) { markAnswer(item, null); totalEmpty++; return; }
+                if (!answer.value || !ratEq(answer.value, ex.answer)) { markAnswer(item, 'incorrect'); totalWrong++; return; }
+                const issue = ex.answerKind === 'frac' && currentSettings.strictFractions && fractionFormIssue(ex.answer, answer.form);
+                if (issue) { markAnswer(item, 'almost', issue); totalAlmost++; return; }
+                markAnswer(item, 'correct'); totalCorrect++;
             });
             if (totalCorrect === currentExamples.length) {
                 clearInterval(timerInterval); isTrainingActive = false;
@@ -524,12 +847,13 @@
             } else {
                 let hint = 'Правильно: ' + totalCorrect + ' из ' + currentExamples.length + '.';
                 if (totalWrong) hint += ' Исправьте ошибки в красных полях.';
+                if (totalAlmost) hint += ' Жёлтые — верно, но дробь нужно сократить или выделить целую часть: ' + totalAlmost + '.';
                 if (totalEmpty) hint += ' Не решено: ' + totalEmpty + '.';
                 document.getElementById('hint-text').innerText = hint;
             }
         }
 
-        // Enter переходит к следующему нерешённому примеру, после последнего — проверка
+        // Enter переходит к следующему пустому полю, после последнего — проверка
         function focusNextAnswer(fromInput) {
             const inputs = [...document.querySelectorAll('.answer-input')];
             const start = inputs.indexOf(fromInput);
@@ -538,8 +862,10 @@
             if (next) next.focus(); else { fromInput.blur(); checkAnswers(); }
         }
 
+        // Знак ставится перед целой частью, а если её нет — перед числителем
         function toggleAnswerSign(button) {
-            const input = button.nextElementSibling;
+            const inputs = [...button.closest('.example-item').querySelectorAll('.answer-input')];
+            const input = inputs.length > 1 && !inputs[0].value.trim() ? inputs[1] : inputs[0];
             if (input.disabled) return;
             const value = input.value.replace(/[−–]/g, '-');
             input.value = value.startsWith('-') ? value.slice(1) : '-' + value;

@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Математический тренажёр PRO</title>
+    <title>Математический тренажёр</title>
     <style>
         :root {
             --bg-color: #f0f2f5; --panel-bg: #ffffff; --text-color: #333;
             --primary-color: #4a90e2; --success-color: #2ecc71; --error-color: #e74c3c;
             --border-color: #ccc; --item-bg: #f8fafc; --item-border: #e2e8f0;
+            --keyboard-height: 0px;
         }
         [data-theme="dark"] {
             --bg-color: #1a1a1a; --panel-bg: #2d2d2d; --text-color: #ecf0f1;
@@ -32,18 +33,26 @@
         .btn-theme { background-color: #f1c40f; color: #333; }
         .btn:hover { opacity: 0.9; }
         .workspace { display: flex; flex: 1; gap: 10px; min-height: 0; }
+        /* Ширина колонки (--col-min) зависит от длины самого длинного примера, её задаёт generateTraining() */
         .examples-grid {
-            flex: 1; background: var(--panel-bg); border-radius: 8px; padding: 15px;
-            display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(5, 1fr); gap: 12px; align-items: center;
+            flex: 1; background: var(--panel-bg); border-radius: 8px; padding: 15px; overflow-y: auto;
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--col-min, 11em)), 1fr));
+            grid-auto-rows: 1fr; gap: 12px; align-content: start;
+            font-size: clamp(18px, 0.9vw + 1vh, 30px); font-weight: bold;
         }
         .example-item {
             background: var(--item-bg); border: 1px solid var(--item-border); border-radius: 8px;
-            display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; height: 100%; font-weight: bold;
+            display: flex; align-items: center; gap: 0.4em; padding: 0.4em 0.6em;
         }
-        .example-text { flex: 1; text-align: right; margin-right: 12px; white-space: nowrap; }
-        .answer-input { width: 85px; padding: 8px; font-size: 18px; text-align: center; border: 2px solid var(--border-color); border-radius: 6px; outline: none; background: var(--panel-bg); color: var(--text-color); }
+        .example-text { flex: 1; text-align: right; line-height: 1.35; }
+        /* Только на время замера ширины в fitColumnsToExamples() */
+        .examples-grid.measuring { grid-template-columns: max-content; }
+        .examples-grid.measuring .example-item { width: max-content; }
+        .examples-grid.measuring .example-text { white-space: nowrap; }
+        .answer-input { width: 4.4em; flex-shrink: 0; padding: 0.3em; font-size: 0.8em; font-weight: bold; text-align: center; border: 2px solid var(--border-color); border-radius: 6px; outline: none; background: var(--panel-bg); color: var(--text-color); }
         .answer-input.correct { border-color: var(--success-color); background-color: rgba(46,204,113,0.15); color: var(--success-color); }
         .answer-input.incorrect { border-color: var(--error-color); background-color: rgba(231,76,60,0.15); }
+        .sign-toggle { flex-shrink: 0; width: 1.7em; height: 1.7em; font-size: 0.7em; font-weight: bold; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); color: var(--text-color); cursor: pointer; }
         .sidebar { width: 220px; background: var(--panel-bg); border-radius: 8px; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
         .info-box { border: 1px dashed var(--border-color); border-radius: 6px; padding: 10px; text-align: center; font-size: 14px; }
         .timer-display { font-size: 28px; font-weight: bold; font-family: monospace; }
@@ -52,25 +61,24 @@
             display: flex; align-items: center; justify-content: center; z-index: 1000; visibility: hidden; opacity: 0; transition: opacity 0.2s;
         }
         .modal-overlay.active { visibility: visible; opacity: 1; }
-        .modal-content { background: var(--panel-bg); color: var(--text-color); padding: 25px; border-radius: 10px; width: 450px; max-width: 90%; display: flex; flex-direction: column; gap: 15px; }
+        .modal-content { background: var(--panel-bg); color: var(--text-color); padding: 25px; border-radius: 10px; width: 450px; max-width: 90%; max-height: 90%; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
         .modal-header { font-size: 20px; font-weight: bold; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
         .setting-row { display: flex; flex-direction: column; gap: 5px; }
         .setting-row label { font-weight: 500; font-size: 14px; }
         .setting-row select, .setting-row input { padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); }
+        .setting-row .checkbox-row { display: flex; align-items: center; gap: 6px; cursor: pointer; }
         .checkbox-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px; }
         .checkbox-list label { display: flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
-        /* Планшеты и телефоны: страница прокручивается, примеры в 2 или 1 колонку */
-        @media (max-width: 900px) {
-            body { height: auto; min-height: 100vh; overflow: auto; }
+        /* Телефоны и планшеты: страница прокручивается, а снизу остаётся место под экранную клавиатуру,
+           чтобы нижние примеры можно было поднять над ней */
+        @media (max-width: 900px), (pointer: coarse), (hover: none) {
+            body { height: auto; min-height: 100vh; overflow: auto; padding-bottom: calc(10px + var(--keyboard-height)); }
             .top-bar { flex-wrap: wrap; gap: 10px; padding: 10px; }
             .controls-left { flex-wrap: wrap; }
             .workspace { flex-direction: column-reverse; }
             .sidebar { width: auto; flex-direction: row; }
             .sidebar .info-box { flex: 1; }
-            .examples-grid { grid-template-columns: repeat(2, 1fr); grid-template-rows: none; }
-        }
-        @media (max-width: 560px) {
-            .examples-grid { grid-template-columns: 1fr; padding: 10px; }
+            .examples-grid { overflow: visible; grid-auto-rows: auto; padding: 10px; font-size: clamp(20px, 2vw + 12px, 28px); }
         }
     </style>
 </head>
@@ -111,8 +119,8 @@
                 </div>
             </div>
             <div class="setting-row">
-                <label for="actions-count">Количество действий в примере:</label>
-                <input type="number" id="actions-count" min="1" max="2" value="1" onchange="saveAllSettings()">
+                <label for="actions-count">Количество действий в примере (1–10):</label>
+                <input type="number" id="actions-count" min="1" max="10" value="1" onchange="saveAllSettings()">
             </div>
             <div class="setting-row">
                 <label for="max-range">Предел и сложность счёта:</label>
@@ -123,6 +131,9 @@
                     <option value="1000">До 1000 (трёхзначные)</option>
                 </select>
             </div>
+            <div class="setting-row">
+                <label class="checkbox-row"><input type="checkbox" id="opt-negatives" onchange="adjustComplexityOptions(); saveAllSettings();"> Отрицательные числа</label>
+            </div>
             <div class="setting-row" id="complexity-container">
                 <label for="complexity-type">Тип вычислений:</label>
                 <select id="complexity-type" onchange="saveAllSettings()">
@@ -131,18 +142,18 @@
                     <option value="carry">Обязательно с переходом / с заимствованием</option>
                 </select>
             </div>
-            <div class="setting-row">
-                <label for="font-size-slider">Размер шрифта примеров:</label>
-                <input type="range" id="font-size-slider" min="18" max="32" value="24" oninput="updateFontSize(this.value); saveAllSettings();">
-            </div>
             <button class="btn btn-start" style="margin-top:10px;" onclick="toggleModal(false); generateTraining();">Применить и Начать</button>
         </div>
     </div>
     <script>
         let currentExamples = []; let timerInterval = null; let secondsElapsed = 0;
-        let isTrainingActive = false; let currentFontSize = 24;
+        let isTrainingActive = false;
         const EXAMPLES_COUNT = 20;
+        const MAX_ACTIONS = 10;
         const OP_SIGNS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
+        const NBSP = ' ';          // знак действия не отрывается от числа при переносе строки
+        const NEGATIVE_SHARE = 0.3;     // доля отрицательных чисел, когда они включены
+        const PARENS_SHARE = 0.35;      // доля «(a + b) × c» среди умножений и делений после сложения
 
         function toggleModal(show) { document.getElementById('settings-modal').classList.toggle('active', show); }
 
@@ -153,15 +164,11 @@
             localStorage.setItem('math_trainer_theme', currentTheme);
         }
 
-        function updateFontSize(val) {
-            currentFontSize = val;
-            document.getElementById('font-size-slider').value = val;
-            document.querySelectorAll('.example-item').forEach(item => item.style.fontSize = val + 'px');
-        }
-
+        // Переход через разряд имеет смысл только для неотрицательных чисел и чисел больше 10
         function adjustComplexityOptions() {
             const range = document.getElementById('max-range').value;
-            document.getElementById('complexity-container').style.display = (range === '10') ? 'none' : 'flex';
+            const negatives = document.getElementById('opt-negatives').checked;
+            document.getElementById('complexity-container').style.display = (range === '10' || negatives) ? 'none' : 'flex';
         }
 
         function saveAllSettings() {
@@ -172,8 +179,8 @@
                 div: document.getElementById('op-div').checked,
                 actions: document.getElementById('actions-count').value,
                 range: document.getElementById('max-range').value,
-                complexity: document.getElementById('complexity-type').value,
-                fontSize: currentFontSize
+                negatives: document.getElementById('opt-negatives').checked,
+                complexity: document.getElementById('complexity-type').value
             };
             localStorage.setItem('math_trainer_config', JSON.stringify(config));
         }
@@ -192,8 +199,8 @@
                     document.getElementById('op-div').checked = config.div;
                     document.getElementById('actions-count').value = config.actions;
                     document.getElementById('max-range').value = config.range;
+                    document.getElementById('opt-negatives').checked = !!config.negatives;
                     document.getElementById('complexity-type').value = config.complexity;
-                    if (config.fontSize) updateFontSize(config.fontSize);
                 } catch(e) { console.error("Ошибка чтения конфига", e); }
             }
             adjustComplexityOptions();
@@ -208,6 +215,16 @@
             if (document.getElementById('op-mul').checked) ops.push('*');
             if (document.getElementById('op-div').checked) ops.push('/');
             return ops;
+        }
+
+        function getSettings() {
+            return {
+                ops: getSelectedOperations(),
+                actions: Math.min(Math.max(parseInt(document.getElementById('actions-count').value) || 1, 1), MAX_ACTIONS),
+                range: parseInt(document.getElementById('max-range').value) || 100,
+                negatives: document.getElementById('opt-negatives').checked,
+                complexity: document.getElementById('complexity-type').value
+            };
         }
 
         // Есть ли переход через разряд хотя бы в одном разряде (единицы, десятки, ...)
@@ -226,43 +243,25 @@
             return false;
         }
 
-        // Возвращает { op, value, result } или null, если к currentValue нельзя применить op с такими настройками
-        function generateSmartAction(currentValue, op, maxRange, complexity) {
-            let minNext = 1;
-            if (maxRange === 100 && currentValue > 10) minNext = 10;
-            if (maxRange === 1000 && currentValue > 100) minNext = 100;
-            const factorLimit = maxRange === 1000 ? 20 : 10;
-
-            if (op === '*') {
-                if (currentValue === 0 || currentValue * 2 > maxRange) return null;
-                const maxFactor = Math.min(factorLimit, Math.floor(maxRange / currentValue));
-                const value = getRandomInt(2, maxFactor);
-                return { op, value, result: currentValue * value };
-            }
-            if (op === '/') {
-                // Делитель от 2 до factorLimit, частное не меньше 2: без «13 ÷ 13» и «450 ÷ 225»
-                const divisors = [];
-                for (let d = 2; d <= factorLimit && d < currentValue; d++) {
-                    if (currentValue % d === 0) divisors.push(d);
-                }
-                if (divisors.length === 0) return null;
-                const value = divisors[getRandomInt(0, divisors.length - 1)];
-                return { op, value, result: currentValue / value };
-            }
-
-            const maxNext = op === '+' ? maxRange - currentValue : currentValue;
-            if (maxNext < minNext) return null;
-            for (let attempt = 0; attempt < 50; attempt++) {
-                const value = getRandomInt(minNext, maxNext);
-                const transition = op === '+' ? hasCarry(currentValue, value) : hasBorrow(currentValue, value);
-                if (maxRange > 10 && complexity === 'no-carry' && transition) continue;
-                if (maxRange > 10 && complexity === 'carry' && !transition) continue;
-                return { op, value, result: op === '+' ? currentValue + value : currentValue - value };
-            }
-            return null;
+        // Подходит ли сложение или вычитание total ± value под выбранный тип вычислений
+        function transitionAllowed(total, sign, value, settings) {
+            if (settings.range <= 10 || settings.negatives || settings.complexity === 'all') return true;
+            const transition = sign > 0 ? hasCarry(total, value) : hasBorrow(total, value);
+            return settings.complexity === 'carry' ? transition : !transition;
         }
 
-        function getInitialValue(maxRange) {
+        function inRange(value, settings) {
+            return value <= settings.range && value >= (settings.negatives ? -settings.range : 0);
+        }
+
+        function formatFirst(value) { return value < 0 ? '−' + (-value) : String(value); }
+        function formatOperand(value) { return value < 0 ? '(−' + (-value) + ')' : String(value); }
+        function randomSign(settings) { return settings.negatives && Math.random() < NEGATIVE_SHARE ? -1 : 1; }
+
+        // В длинных примерах стартовое число любое: цепочке сложений нужно начинать с малого, вычитаний — с большого
+        function getInitialValue(settings) {
+            const maxRange = settings.range;
+            if (settings.actions > 2) return getRandomInt(1, maxRange - 1);
             if (maxRange === 10) return getRandomInt(1, 9);
             if (maxRange === 20) return getRandomInt(1, 19);
             if (maxRange === 100) return getRandomInt(11, 89);
@@ -270,27 +269,122 @@
             return getRandomInt(1, maxRange - 1);
         }
 
-        // Если шаг не получился, пример собирается заново с другим начальным числом,
-        // поэтому в нём бывают только выбранные операции
-        function generateExample(allowedOps, actionsCount, maxRange, complexity) {
-            for (let attempt = 0; attempt < 500; attempt++) {
-                let value = getInitialValue(maxRange);
-                let text = String(value);
-                let endsWithAddition = false, failed = false;
+        /*
+         * Пример хранится как сумма слагаемых, поэтому порядок действий соблюдается сам собой:
+         * «12 + 3 × 4 − 10 ÷ 5» — это слагаемые 12, +(3 × 4) и −(10 ÷ 5).
+         * Умножение и деление применяются либо к последнему слагаемому («2 + 6 ÷ 2»),
+         * либо ко всему примеру в скобках («(2 + 6) ÷ 2»).
+         * state: { terms: [{ sign, text, value, plain }], total }; plain — слагаемое из одного числа
+         */
+        function termsText(terms) {
+            return terms.map((t, i) => i === 0 ? t.text : ' ' + (t.sign > 0 ? '+' : '−') + NBSP + t.text).join('');
+        }
 
-                for (let a = 0; a < actionsCount; a++) {
-                    const op = allowedOps[getRandomInt(0, allowedOps.length - 1)];
-                    const step = generateSmartAction(value, op, maxRange, complexity);
-                    if (!step) { failed = true; break; }
-                    const isMultiplicative = op === '*' || op === '/';
-                    // Действия выполняются слева направо, поэтому «5 + 3 × 2» нужно записать как «(5 + 3) × 2»,
-                    // иначе по правилу порядка действий правильный ответ будет другим
-                    if (isMultiplicative && endsWithAddition) text = '(' + text + ')';
-                    endsWithAddition = !isMultiplicative;
-                    text += ' ' + OP_SIGNS[op] + ' ' + step.value;
-                    value = step.result;
+        function minOperand(total, settings) {
+            if (settings.range === 100 && Math.abs(total) > 10) return 10;
+            if (settings.range === 1000 && Math.abs(total) > 100) return 100;
+            return 1;
+        }
+
+        // remaining — сколько действий ещё впереди: под них оставляется запас до предела счёта
+        function tryAdditive(state, op, settings, remaining) {
+            const sign = op === '+' ? 1 : -1;
+            const minNext = minOperand(state.total, settings);
+            for (let attempt = 0; attempt < 20; attempt++) {
+                const operandSign = randomSign(settings);
+                // Насколько можно сдвинуть сумму в нужную сторону, не выходя за пределы счёта
+                const direction = sign * operandSign;
+                const maxMagnitude = direction > 0 ? settings.range - state.total
+                                                   : state.total + (settings.negatives ? settings.range : 0);
+                if (maxMagnitude < 1) continue;
+                const cap = Math.max(1, Math.floor(maxMagnitude / (remaining + 1)));
+                const value = operandSign * getRandomInt(cap >= minNext ? minNext : 1, cap);
+                if (!transitionAllowed(state.total, sign, value, settings)) continue;
+                return {
+                    terms: [...state.terms, { sign, text: formatOperand(value), value, plain: true }],
+                    total: state.total + sign * value
+                };
+            }
+            return null;
+        }
+
+        function factorLimit(settings) { return settings.range === 1000 ? 20 : 10; }
+
+        // Число перед × или ÷ подбирается заново под множитель или делитель: «7 × 8», «56 ÷ 8».
+        // Знак числа сохраняется
+        function rebuildPlain(base, op, settings, isFirst) {
+            const factor = randomSign(settings) * getRandomInt(2, factorLimit(settings));
+            const maxQuotient = Math.floor(settings.range / Math.abs(factor));
+            if (maxQuotient < 2) return null;
+            const n = getRandomInt(2, maxQuotient);
+            const number = Math.sign(base.value || 1) * (op === '*' ? n : n * Math.abs(factor));
+            const value = op === '*' ? number * factor : number / factor;
+            const text = (isFirst ? formatFirst(number) : formatOperand(number)) + ' ' + OP_SIGNS[op] + NBSP + formatOperand(factor);
+            return { sign: base.sign, text, value };
+        }
+
+        // Множитель от 2 до 10 (до 20 для 1000), делитель такой же и частное по модулю не меньше 2:
+        // без «13 ÷ 13» и «450 ÷ 225»
+        function pickFactor(base, op, settings) {
+            const limit = factorLimit(settings);
+            const sign = randomSign(settings);
+            if (op === '*') {
+                if (base === 0) return null;
+                const max = Math.min(limit, Math.floor(settings.range / Math.abs(base)));
+                return max < 2 ? null : sign * getRandomInt(2, max);
+            }
+            const divisors = [];
+            for (let d = 2; d <= limit && d < Math.abs(base); d++) {
+                if (base % d === 0) divisors.push(d);
+            }
+            return divisors.length ? sign * divisors[getRandomInt(0, divisors.length - 1)] : null;
+        }
+
+        function tryMultiplicative(state, op, settings) {
+            const wrap = state.terms.length > 1 && Math.random() < PARENS_SHARE;
+            const base = wrap ? { sign: 1, text: '(' + termsText(state.terms) + ')', value: state.total }
+                              : state.terms[state.terms.length - 1];
+            const rest = wrap ? [] : state.terms.slice(0, -1);
+
+            let term;
+            if (base.plain && (op === '/' || Math.random() < 0.5)) {
+                term = rebuildPlain(base, op, settings, rest.length === 0);
+            } else {
+                const factor = pickFactor(base.value, op, settings);
+                if (factor !== null) term = {
+                    sign: base.sign,
+                    text: base.text + ' ' + OP_SIGNS[op] + NBSP + formatOperand(factor),
+                    value: op === '*' ? base.value * factor : base.value / factor
+                };
+            }
+            if (!term) return null;
+
+            const restTotal = rest.reduce((sum, t) => sum + t.sign * t.value, 0);
+            const total = restTotal + term.sign * term.value;
+            if (Math.abs(term.value) > settings.range || !inRange(total, settings)) return null;
+            if (rest.length && !transitionAllowed(restTotal, term.sign, term.value, settings)) return null;
+            return { terms: [...rest, term], total };
+        }
+
+        // Если действие не получилось, пробуется другое из выбранных, а если не выходит и так,
+        // пример собирается заново: невыбранные операции в нём не появляются
+        function generateExample(settings) {
+            for (let attempt = 0; attempt < 300; attempt++) {
+                const first = randomSign(settings) * getInitialValue(settings);
+                let state = { terms: [{ sign: 1, text: formatFirst(first), value: first, plain: true }], total: first };
+                let done = 0;
+
+                for (; done < settings.actions; done++) {
+                    let next = null;
+                    for (let tries = 0; tries < 30 && !next; tries++) {
+                        const op = settings.ops[getRandomInt(0, settings.ops.length - 1)];
+                        next = (op === '+' || op === '-') ? tryAdditive(state, op, settings, settings.actions - done - 1)
+                                                          : tryMultiplicative(state, op, settings);
+                    }
+                    if (!next) break;
+                    state = next;
                 }
-                if (!failed) return { text, answer: value };
+                if (done === settings.actions) return { text: termsText(state.terms), answer: state.total };
             }
             return null;
         }
@@ -309,18 +403,14 @@
             const container = document.getElementById('examples-container');
             container.innerHTML = ''; currentExamples = []; isTrainingActive = false;
             clearInterval(timerInterval);
-            const allowedOps = getSelectedOperations();
-            if (allowedOps.length === 0) { alert('Выберите операции в настройках!'); toggleModal(true); return; }
-
-            const actionsCount = Math.min(Math.max(parseInt(document.getElementById('actions-count').value) || 1, 1), 2);
-            const maxRange = parseInt(document.getElementById('max-range').value) || 100;
-            const complexity = document.getElementById('complexity-type').value;
+            const settings = getSettings();
+            if (settings.ops.length === 0) { alert('Выберите операции в настройках!'); toggleModal(true); return; }
 
             for (let i = 0; i < EXAMPLES_COUNT; i++) {
-                const example = generateExample(allowedOps, actionsCount, maxRange, complexity);
+                const example = generateExample(settings);
                 if (!example) {
                     currentExamples = [];
-                    alert('С такими настройками не получается составить примеры. Измените операции или предел счёта.');
+                    alert('С такими настройками не получается составить примеры. Уменьшите количество действий, выберите больше операций или увеличьте предел счёта.');
                     toggleModal(true);
                     return;
                 }
@@ -329,13 +419,31 @@
 
             currentExamples.forEach((example, i) => {
                 const item = document.createElement('div');
-                item.className = 'example-item'; item.style.fontSize = currentFontSize + 'px';
-                item.innerHTML = '<span class="example-text">' + example.text + ' =</span>' +
-                                 '<input type="text" inputmode="numeric" autocomplete="off" class="answer-input" id="input-ans-' + i + '">';
+                item.className = 'example-item';
+                item.innerHTML = '<span class="example-text">' + example.text + NBSP + '=</span>' +
+                                 (settings.negatives ? '<button type="button" class="sign-toggle" tabindex="-1" title="Сменить знак ответа">±</button>' : '') +
+                                 '<input type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" class="answer-input" id="input-ans-' + i + '">';
                 container.appendChild(item);
             });
+            fitColumnsToExamples(container);
             isTrainingActive = true;
             startTimer(); document.getElementById('hint-text').innerText = 'Решите примеры и нажмите «Проверка».';
+        }
+
+        // Ширина колонки — по самому длинному примеру в одну строку, но не больше 34em:
+        // ещё более длинные примеры переносятся. Задаётся в em, поэтому подходит при любом размере шрифта
+        function fitColumnsToExamples(container) {
+            container.classList.add('measuring');
+            const fontSize = parseFloat(getComputedStyle(container).fontSize);
+            const widest = Math.max(...[...container.children].map(item => item.scrollWidth));
+            container.classList.remove('measuring');
+            container.style.setProperty('--col-min', Math.min(widest / fontSize + 0.2, 34).toFixed(2) + 'em');
+        }
+
+        // Принимает «-5» и «−5»; всё, что не целое число, считается ошибкой
+        function parseAnswer(raw) {
+            const text = raw.replace(/[−–]/g, '-');
+            return /^-?\d+$/.test(text) ? Number(text) : NaN;
         }
 
         function checkAnswers() {
@@ -345,7 +453,7 @@
                 const inputEl = document.getElementById('input-ans-' + idx);
                 const raw = inputEl.value.trim(); inputEl.classList.remove('correct', 'incorrect');
                 if (raw === '') { totalEmpty++; return; }
-                if (Number(raw) === ex.answer) {
+                if (parseAnswer(raw) === ex.answer) {
                     inputEl.classList.add('correct'); inputEl.disabled = true; totalCorrect++;
                 } else { inputEl.classList.add('incorrect'); totalWrong++; }
             });
@@ -360,8 +468,66 @@
             }
         }
 
+        // Enter переходит к следующему нерешённому примеру, после последнего — проверка
+        function focusNextAnswer(fromInput) {
+            const inputs = [...document.querySelectorAll('.answer-input')];
+            const start = inputs.indexOf(fromInput);
+            const next = inputs.slice(start + 1).concat(inputs.slice(0, start))
+                               .find(el => !el.disabled && el.value.trim() === '');
+            if (next) next.focus(); else { fromInput.blur(); checkAnswers(); }
+        }
+
+        function toggleAnswerSign(button) {
+            const input = button.nextElementSibling;
+            if (input.disabled) return;
+            const value = input.value.replace(/[−–]/g, '-');
+            input.value = value.startsWith('-') ? value.slice(1) : '-' + value;
+            input.focus();
+        }
+
+        // Экранная клавиатура: высота, которую она закрывает, уходит в --keyboard-height
+        // (отступ снизу страницы), а пример с полем ввода прокручивается в видимую часть экрана
+        function keepAnswerVisible(input) {
+            const item = input.closest('.example-item');
+            const vv = window.visualViewport;
+            const top = vv ? vv.offsetTop : 0;
+            const bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+            const rect = item.getBoundingClientRect();
+            if (rect.top < top || rect.bottom > bottom - 8) item.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+
+        function setupKeyboardAvoidance() {
+            const vv = window.visualViewport;
+            if (!vv) return;
+            vv.addEventListener('resize', () => {
+                const keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+                document.documentElement.style.setProperty('--keyboard-height', keyboard + 'px');
+                const active = document.activeElement;
+                if (keyboard > 0 && active && active.classList.contains('answer-input')) keepAnswerVisible(active);
+            });
+        }
+
+        function setupAnswerInputs() {
+            const container = document.getElementById('examples-container');
+            container.addEventListener('keydown', e => {
+                if (e.key === 'Enter' && e.target.classList.contains('answer-input')) {
+                    e.preventDefault(); focusNextAnswer(e.target);
+                }
+            });
+            container.addEventListener('click', e => {
+                const button = e.target.closest('.sign-toggle');
+                if (button) toggleAnswerSign(button);
+            });
+            // Клавиатура выезжает с анимацией, поэтому положение проверяется с задержкой
+            container.addEventListener('focusin', e => {
+                if (e.target.classList.contains('answer-input')) setTimeout(() => keepAnswerVisible(e.target), 350);
+            });
+        }
+
         window.onload = function() {
             loadAllSettings();
+            setupAnswerInputs();
+            setupKeyboardAvoidance();
             generateTraining();
         };
     </script>

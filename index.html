@@ -59,6 +59,19 @@
         .setting-row select, .setting-row input { padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); }
         .checkbox-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px; }
         .checkbox-list label { display: flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+        /* Планшеты и телефоны: страница прокручивается, примеры в 2 или 1 колонку */
+        @media (max-width: 900px) {
+            body { height: auto; min-height: 100vh; overflow: auto; }
+            .top-bar { flex-wrap: wrap; gap: 10px; padding: 10px; }
+            .controls-left { flex-wrap: wrap; }
+            .workspace { flex-direction: column-reverse; }
+            .sidebar { width: auto; flex-direction: row; }
+            .sidebar .info-box { flex: 1; }
+            .examples-grid { grid-template-columns: repeat(2, 1fr); grid-template-rows: none; }
+        }
+        @media (max-width: 560px) {
+            .examples-grid { grid-template-columns: 1fr; padding: 10px; }
+        }
     </style>
 </head>
 <body>
@@ -92,7 +105,7 @@
                 <label>Арифметические операции:</label>
                 <div class="checkbox-list">
                     <label><input type="checkbox" id="op-add" checked onchange="saveAllSettings()"> Сложение (+)</label>
-                    <label><input type="checkbox" id="op-sub" checked onchange="saveAllSettings()"> Вычитание (-)</label>
+                    <label><input type="checkbox" id="op-sub" checked onchange="saveAllSettings()"> Вычитание (−)</label>
                     <label><input type="checkbox" id="op-mul" onchange="saveAllSettings()"> Умножение (×)</label>
                     <label><input type="checkbox" id="op-div" onchange="saveAllSettings()"> Деление (÷)</label>
                 </div>
@@ -128,6 +141,8 @@
     <script>
         let currentExamples = []; let timerInterval = null; let secondsElapsed = 0;
         let isTrainingActive = false; let currentFontSize = 24;
+        const EXAMPLES_COUNT = 20;
+        const OP_SIGNS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
 
         function toggleModal(show) { document.getElementById('settings-modal').classList.toggle('active', show); }
 
@@ -195,44 +210,89 @@
             return ops;
         }
 
-        function generateSmartAction(currentValue, op, maxRange, complexity) {
-            let nextValue = 0, attempts = 0;
-            while (attempts < 500) {
-                attempts++; let minNext = 1;
-                if (maxRange === 100 && currentValue > 10) minNext = 10;
-                if (maxRange === 1000 && currentValue > 100) minNext = 100;
-
-                if (op === '+') {
-                    nextValue = getRandomInt(minNext, maxRange - currentValue);
-                    if (nextValue <= 0 || (currentValue + nextValue) > maxRange) continue;
-                    const hasCarry = ((currentValue % 10) + (nextValue % 10)) >= 10;
-                    if (maxRange > 10 && complexity === 'no-carry' && hasCarry) continue;
-                    if (maxRange > 10 && complexity === 'carry' && !hasCarry) continue;
-                    return { text: ' + ' + nextValue, result: currentValue + nextValue };
-                }
-                else if (op === '-') {
-                    nextValue = getRandomInt(minNext, currentValue);
-                    if (nextValue <= 0 || (currentValue - nextValue) < 0) continue;
-                    const hasBorrow = (currentValue % 10) < (nextValue % 10);
-                    if (maxRange > 10 && complexity === 'no-carry' && hasBorrow) continue;
-                    if (maxRange > 10 && complexity === 'carry' && !hasBorrow) continue;
-                    return { text: ' - ' + nextValue, result: currentValue - nextValue };
-                }
-                else if (op === '*') {
-                    let limit = maxRange === 1000 ? 20 : 10; nextValue = getRandomInt(2, limit);
-                    if (nextValue > maxRange || (currentValue * nextValue) > maxRange) continue;
-                    return { text: ' × ' + nextValue, result: currentValue * nextValue };
-                }
-                else if (op === '/') {
-                    let divisors = [];
-                    for (let i = 2; i <= currentValue; i++) { if (currentValue % i === 0) divisors.push(i); }
-                    if (divisors.length === 0) continue;
-                    nextValue = divisors[Math.floor(Math.random() * divisors.length)];
-                    if (nextValue > maxRange || (currentValue / nextValue) > maxRange) continue;
-                    return { text: ' ÷ ' + nextValue, result: currentValue / nextValue };
-                }
+        // Есть ли переход через разряд хотя бы в одном разряде (единицы, десятки, ...)
+        function hasCarry(a, b) {
+            for (; a > 0 || b > 0; a = Math.floor(a / 10), b = Math.floor(b / 10)) {
+                if (a % 10 + b % 10 >= 10) return true;
             }
-            return (currentValue + 1 <= maxRange) ? { text: ' + 1', result: currentValue + 1 } : { text: ' - 1', result: currentValue - 1 };
+            return false;
+        }
+
+        // Нужно ли занимать из старшего разряда при вычитании a - b (a >= b)
+        function hasBorrow(a, b) {
+            for (; b > 0; a = Math.floor(a / 10), b = Math.floor(b / 10)) {
+                if (a % 10 < b % 10) return true;
+            }
+            return false;
+        }
+
+        // Возвращает { op, value, result } или null, если к currentValue нельзя применить op с такими настройками
+        function generateSmartAction(currentValue, op, maxRange, complexity) {
+            let minNext = 1;
+            if (maxRange === 100 && currentValue > 10) minNext = 10;
+            if (maxRange === 1000 && currentValue > 100) minNext = 100;
+            const factorLimit = maxRange === 1000 ? 20 : 10;
+
+            if (op === '*') {
+                if (currentValue === 0 || currentValue * 2 > maxRange) return null;
+                const maxFactor = Math.min(factorLimit, Math.floor(maxRange / currentValue));
+                const value = getRandomInt(2, maxFactor);
+                return { op, value, result: currentValue * value };
+            }
+            if (op === '/') {
+                // Делитель от 2 до factorLimit, частное не меньше 2: без «13 ÷ 13» и «450 ÷ 225»
+                const divisors = [];
+                for (let d = 2; d <= factorLimit && d < currentValue; d++) {
+                    if (currentValue % d === 0) divisors.push(d);
+                }
+                if (divisors.length === 0) return null;
+                const value = divisors[getRandomInt(0, divisors.length - 1)];
+                return { op, value, result: currentValue / value };
+            }
+
+            const maxNext = op === '+' ? maxRange - currentValue : currentValue;
+            if (maxNext < minNext) return null;
+            for (let attempt = 0; attempt < 50; attempt++) {
+                const value = getRandomInt(minNext, maxNext);
+                const transition = op === '+' ? hasCarry(currentValue, value) : hasBorrow(currentValue, value);
+                if (maxRange > 10 && complexity === 'no-carry' && transition) continue;
+                if (maxRange > 10 && complexity === 'carry' && !transition) continue;
+                return { op, value, result: op === '+' ? currentValue + value : currentValue - value };
+            }
+            return null;
+        }
+
+        function getInitialValue(maxRange) {
+            if (maxRange === 10) return getRandomInt(1, 9);
+            if (maxRange === 20) return getRandomInt(1, 19);
+            if (maxRange === 100) return getRandomInt(11, 89);
+            if (maxRange === 1000) return getRandomInt(101, 899);
+            return getRandomInt(1, maxRange - 1);
+        }
+
+        // Если шаг не получился, пример собирается заново с другим начальным числом,
+        // поэтому в нём бывают только выбранные операции
+        function generateExample(allowedOps, actionsCount, maxRange, complexity) {
+            for (let attempt = 0; attempt < 500; attempt++) {
+                let value = getInitialValue(maxRange);
+                let text = String(value);
+                let endsWithAddition = false, failed = false;
+
+                for (let a = 0; a < actionsCount; a++) {
+                    const op = allowedOps[getRandomInt(0, allowedOps.length - 1)];
+                    const step = generateSmartAction(value, op, maxRange, complexity);
+                    if (!step) { failed = true; break; }
+                    const isMultiplicative = op === '*' || op === '/';
+                    // Действия выполняются слева направо, поэтому «5 + 3 × 2» нужно записать как «(5 + 3) × 2»,
+                    // иначе по правилу порядка действий правильный ответ будет другим
+                    if (isMultiplicative && endsWithAddition) text = '(' + text + ')';
+                    endsWithAddition = !isMultiplicative;
+                    text += ' ' + OP_SIGNS[op] + ' ' + step.value;
+                    value = step.result;
+                }
+                if (!failed) return { text, answer: value };
+            }
+            return null;
         }
 
         function startTimer() {
@@ -247,54 +307,57 @@
 
         function generateTraining() {
             const container = document.getElementById('examples-container');
-            container.innerHTML = ''; currentExamples = []; isTrainingActive = true;
+            container.innerHTML = ''; currentExamples = []; isTrainingActive = false;
+            clearInterval(timerInterval);
             const allowedOps = getSelectedOperations();
             if (allowedOps.length === 0) { alert('Выберите операции в настройках!'); toggleModal(true); return; }
 
-            const actionsCount = parseInt(document.getElementById('actions-count').value) || 1;
+            const actionsCount = Math.min(Math.max(parseInt(document.getElementById('actions-count').value) || 1, 1), 2);
             const maxRange = parseInt(document.getElementById('max-range').value) || 100;
             const complexity = document.getElementById('complexity-type').value;
-            startTimer(); document.getElementById('hint-text').innerText = 'Исправляйте ошибки в красных полях.';
 
-            for (let i = 0; i < 20; i++) {
-                let initialValue = 0;
-                if (maxRange === 10) initialValue = getRandomInt(1, 9);
-                else if (maxRange === 20) initialValue = getRandomInt(1, 19);
-                else if (maxRange === 100) initialValue = getRandomInt(11, 89);
-                else if (maxRange === 1000) initialValue = getRandomInt(101, 899);
-                else initialValue = getRandomInt(1, maxRange - 1);
-
-                let exampleText = initialValue.toString(); let currentAccumulator = initialValue;
-
-                for (let a = 0; a < actionsCount; a++) {
-                    let op = allowedOps[Math.floor(Math.random() * allowedOps.length)];
-                    let step = generateSmartAction(currentAccumulator, op, maxRange, complexity);
-                    exampleText += step.text; currentAccumulator = step.result;
+            for (let i = 0; i < EXAMPLES_COUNT; i++) {
+                const example = generateExample(allowedOps, actionsCount, maxRange, complexity);
+                if (!example) {
+                    currentExamples = [];
+                    alert('С такими настройками не получается составить примеры. Измените операции или предел счёта.');
+                    toggleModal(true);
+                    return;
                 }
-                currentExamples.push({ text: exampleText, answer: currentAccumulator });
+                currentExamples.push(example);
+            }
 
+            currentExamples.forEach((example, i) => {
                 const item = document.createElement('div');
                 item.className = 'example-item'; item.style.fontSize = currentFontSize + 'px';
-                item.innerHTML = '<span class="example-text">' + exampleText + ' =</span>' +
-                                 '<input type="number" class="answer-input" id="input-ans-' + i + '">';
+                item.innerHTML = '<span class="example-text">' + example.text + ' =</span>' +
+                                 '<input type="text" inputmode="numeric" autocomplete="off" class="answer-input" id="input-ans-' + i + '">';
                 container.appendChild(item);
-            }
+            });
+            isTrainingActive = true;
+            startTimer(); document.getElementById('hint-text').innerText = 'Решите примеры и нажмите «Проверка».';
         }
 
         function checkAnswers() {
             if (currentExamples.length === 0 || !isTrainingActive) return;
-            let totalCorrect = 0;
+            let totalCorrect = 0, totalWrong = 0, totalEmpty = 0;
             currentExamples.forEach((ex, idx) => {
                 const inputEl = document.getElementById('input-ans-' + idx);
-                const userAns = parseInt(inputEl.value); inputEl.classList.remove('correct', 'incorrect');
-                if (userAns === ex.answer) {
+                const raw = inputEl.value.trim(); inputEl.classList.remove('correct', 'incorrect');
+                if (raw === '') { totalEmpty++; return; }
+                if (Number(raw) === ex.answer) {
                     inputEl.classList.add('correct'); inputEl.disabled = true; totalCorrect++;
-                } else { inputEl.classList.add('incorrect'); }
+                } else { inputEl.classList.add('incorrect'); totalWrong++; }
             });
-            if (totalCorrect === 20) {
+            if (totalCorrect === currentExamples.length) {
                 clearInterval(timerInterval); isTrainingActive = false;
                 document.getElementById('hint-text').innerHTML = '<strong>Супер!</strong> Все примеры решены верно!';
-            } else { document.getElementById('hint-text').innerText = 'Правильно: ' + totalCorrect + ' из 20. Исправьте ошибки.'; }
+            } else {
+                let hint = 'Правильно: ' + totalCorrect + ' из ' + currentExamples.length + '.';
+                if (totalWrong) hint += ' Исправьте ошибки в красных полях.';
+                if (totalEmpty) hint += ' Не решено: ' + totalEmpty + '.';
+                document.getElementById('hint-text').innerText = hint;
+            }
         }
 
         window.onload = function() {
